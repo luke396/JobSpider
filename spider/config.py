@@ -24,7 +24,7 @@ AREA_DB_NAME = "51area.db"
 AREA_SQLITE_FILE_PATH = Path(create_output_dir(tag="area")) / AREA_DB_NAME
 
 JOB_DB_NAME = "51job.db"
-JOB_SQLITE_FILE_PATH = Path(create_output_dir(tag="area")) / JOB_DB_NAME
+JOB_SQLITE_FILE_PATH = Path(create_output_dir(tag="job")) / JOB_DB_NAME
 
 SLIDER_XPATH = '//div[@class="nc_bg"]'
 WAIT_TIME = 10

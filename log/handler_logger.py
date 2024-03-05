@@ -33,11 +33,7 @@ class HandlerLogger:
         self.logger.setLevel(logging.DEBUG)
 
     def __set_log_handler(self, log_handler: RotatingFileHandler) -> None:
-        """Set log file logging handler.
-
-        :Arg:
-         - log_handler: log file logging handler
-        """
+        """Set log file logging handler."""
         log_handler.setLevel(logging.INFO)
         log_handler.setFormatter(self.formatter)
         self.logger.addHandler(log_handler)
@@ -57,7 +53,7 @@ class HandlerLogger:
         """Init log file logging handler."""
         current_dir = Path(__file__).parent
         abs_dir = current_dir / filename
-        RotatingFileHandler(
+        return RotatingFileHandler(
             filename=abs_dir,
             maxBytes=1024 * 1024,
             encoding="utf-8",
