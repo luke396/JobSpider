@@ -5,11 +5,19 @@ import random
 import re
 import sqlite3
 import time
+import urllib.parse
 
 import pandas as pd
 from bs4 import BeautifulSoup
+from config import (
+    CHROMESERVICEPATH,
+    FIREWALL_MESSAGE,
+    MAX_RETRIES,
+    MAX_SLEEP,
+    MIN_SLEEP,
+    PROXY_GROUP,
+)
 from fake_useragent import UserAgent
-from requests.exceptions import RequestException
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver import ActionChains
@@ -18,13 +26,8 @@ from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
 
 from spider import logger
-
-MAX_RETRIES = 3
-MIN_SLEEP = 1
-MAX_SLEEP = 3
 
 
 class JobSipder51:
@@ -55,7 +58,7 @@ class JobSipder51:
         if not os.path.exists(directory):
             os.makedirs(directory)
 
-    def __driver_builder(self):
+    def _build_driver(self):
         """Init webdriver.
 
         During the building process, it is necessary to set up an anti crawler detection strategy by Option.
@@ -96,7 +99,7 @@ class JobSipder51:
         Finally, inject script to change navigator = false to avoid detection.
         """
         user_agent = UserAgent().random
-        service = ChromeService(ChromeDriverManager().install())
+        service = ChromeService(CHROMESERVICEPATH)
 
         options = Options()
         options.add_argument("--no-sandbox")
@@ -110,15 +113,12 @@ class JobSipder51:
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("useAutomationExtension", False)
         options.add_argument(f"user-agent={user_agent}")
+        options.add_argument("--proxy-server=" + random.choice(PROXY_GROUP))
 
         web = webdriver.Chrome(service=service, options=options)
         web.execute_script(
             'Object.defineProperty(navigator, "webdriver", {get: () => false,});'
         )
-
-        # cookie = web.get_cookies()
-        # logger.info("Cookie: " + str(cookie))
-        # In local wsl2, empty cookie works well
 
         logger.info("Building webdriver done")
 
@@ -293,49 +293,86 @@ class JobSipder51:
                 encoding="utf-8",
             )
 
-    def build_url(self):
+    def _build_url(self):
         """Build the URL for the job search API."""
-        extra = f"&timestamp={self.timestamp}&keyword={self.keyword}&pageNum={self.page}&jobArea={self.area}"
-        fake = self.fakeUrl.split("&")
-        fake.remove(random.choice(fake))
-        fake = "&".join(fake)
-        url = self.baseUrl + extra + fake
-        logger.info("Crawling " + url)
-        return url
+        base_url = urllib.parse.urlparse(self.baseUrl)
+
+        extra_query_params = {
+            "timestamp": self.timestamp,
+            "keyword": self.keyword,
+            "pageNum": self.page,
+            "jobArea": self.area,
+        }
+
+        # fake to aviod detection
+        fake_query_params = {
+            "jobArea2": "",
+            "jobType": "",
+            "salary": "",
+            "workYear": "",
+            "degree": "",
+            "companyType": "",
+            "companySize": "",
+            "issueDate": "",
+        }
+        # Randomly drop one or two parameters
+        for _ in range(random.randint(1, 2)):
+            if fake_query_params:
+                random_key = random.choice(list(fake_query_params.keys()))
+                fake_query_params.pop(random_key)
+
+        base_query_params = urllib.parse.parse_qs(base_url.query)
+        base_query_params.update(extra_query_params)
+        base_query_params.update(fake_query_params)
+        combined_url = base_url._replace(
+            query=urllib.parse.urlencode(base_query_params, doseq=True)
+        )
+
+        logger.info(f"Crawling {combined_url.geturl()}")
+        return combined_url.geturl()
 
     def get_data_json(self):
         """Get the JSON data from the API."""
-        url = self.build_url()
-        web = self.__driver_builder()
+        url = self._build_url()
+        web = self._build_driver()
         dataJson = None
 
         for _ in range(MAX_RETRIES):
             try:
-                self.navigate_to_url(web, url)
-                self.pass_slider_verification(web)
-                dataJson = self.parse_html(web.page_source)
+                self._navigate_to_url(web, url)
+                self._bypass_slider_verification(web)
+                dataJson = self._parse_html(web.page_source)
                 if dataJson is not None:  # success to get data page
                     break
                 else:  # no data page, jump to next
                     return
-            except (WebDriverException, RequestException) as e:
-                logger.warning(f"Failed due to {e}, retrying...")
+            except Exception as e:
+                logger.warning(f"Failed to get data: {e}")
+                continue
+            finally:
+                web.quit()  # ensure the all browser is closed
 
-        web.close()
         return dataJson
 
-    def navigate_to_url(self, web, url):
+    def _navigate_to_url(self, web, url):
         """Navigate to the given URL."""
         time.sleep(random.uniform(MIN_SLEEP, MAX_SLEEP))
         web.get(url)
+        self._varify_firewall(web)
 
-    def pass_slider_verification(self, web):
+    def _varify_firewall(self, web):
+        """Check if the request was blocked by a firewall."""
+        soup = BeautifulSoup(web.page_source, "html.parser")
+        if FIREWALL_MESSAGE in soup.text:
+            raise WebDriverException("Firewall detected")
+
+    def _bypass_slider_verification(self, web):
         """Pass the slider verification."""
         logger.info("Slider verification")
         time.sleep(random.uniform(MIN_SLEEP, MAX_SLEEP))
         self.__slider_verify(web)
 
-    def parse_html(self, html):
+    def _parse_html(self, html):
         """Parse the HTML content and return the job items."""
         try:
             soup = BeautifulSoup(html, "html.parser")

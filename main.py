@@ -79,8 +79,8 @@ KEYWORD = "数据挖掘"
 MAX_PAGE_NUM = 20
 
 # control the area, total is 56.
-STRAT_AREA_CODE = 24
-END_AREA_CODE = 30
+STRAT_AREA_CODE = 1
+END_AREA_CODE = None
 
 if __name__ == "__main__":
     # area()
