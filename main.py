@@ -4,12 +4,13 @@ import sqlite3
 from pathlib import Path
 
 from spider import areaspider51, jobspider51, logger
-
-AREA_DB_PATH = Path(__file__).resolve().parent / "output" / "area" / "51area.db"
-MAX_PAGE_NUM = 20
-STRAT_AREA_CODE = 1
-END_AREA_CODE = None
-KEYWORD = "数据挖掘"
+from spider.config import (
+    AREA_DB_PATH,
+    END_AREA_CODE,
+    KEYWORD,
+    MAX_PAGE_NUM,
+    STRAT_AREA_CODE,
+)
 
 
 def area_spider() -> None:

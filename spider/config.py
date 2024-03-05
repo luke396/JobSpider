@@ -9,15 +9,12 @@ from spider.utility import create_output_dir
 MAX_RETRIES = 3
 MIN_SLEEP = 1
 MAX_SLEEP = 3
-CHROMESERVICEPATH = ChromeDriverManager().install()
-
+CHROME_SERVICE_PATH = ChromeDriverManager().install()
 PROXY_GROUP = [  # set your proxy group
     "http://localhost:30001",
     "http://localhost:30002",
     "http://localhost:30003",
 ]
-
-# 51job
 FIREWALL_MESSAGE = "很抱歉，由于您访问的URL有可能对网站造成安全威胁，您的访问被阻断"  # noqa: RUF001
 
 AREA_DB_NAME = "51area.db"
@@ -37,3 +34,10 @@ MAX_PAUSE = 0.00005
 STEPS = 30
 MOVE_DISTANCE = 20
 MOVE_VARIANCE = 0.01
+
+# main
+AREA_DB_PATH = Path(__file__).resolve().parent / "output" / "area" / "51area.db"
+MAX_PAGE_NUM = 20
+STRAT_AREA_CODE = 1
+END_AREA_CODE = None
+KEYWORD = "数据挖掘"
