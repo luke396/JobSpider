@@ -5,7 +5,7 @@ from pathlib import Path
 
 from spider import areaspider51, jobspider51, logger
 from spider.config import (
-    AREA_DB_PATH,
+    AREA_SQLITE_FILE_PATH,
     END_AREA_CODE,
     KEYWORD,
     MAX_PAGE_NUM,
@@ -20,7 +20,7 @@ def area_spider() -> None:
 
 def job_spider(page_num: int = MAX_PAGE_NUM) -> None:
     """Get the data of Job."""
-    if not Path.exists(AREA_DB_PATH):
+    if not Path.exists(AREA_SQLITE_FILE_PATH):
         area_spider()
     job_spider_db(page_num)
 
@@ -31,7 +31,7 @@ def job_spider_db(page_num: int) -> None:
 
     sql = """SELECT `code`, `area` FROM `area51`;"""
     try:
-        with sqlite3.connect(AREA_DB_PATH) as connect:
+        with sqlite3.connect(AREA_SQLITE_FILE_PATH) as connect:
             cursor = connect.cursor()
             cursor.execute(sql)
             results = cursor.fetchall()

@@ -32,8 +32,8 @@ from spider.config import (
     STEPS,
     WAIT_TIME,
     WIDTH_FACTOR,
+    build_driver,
 )
-from spider.utility import build_driver
 
 
 class JobSipder51:
