@@ -1,7 +1,9 @@
 """This file is used to store the configuration of the spider."""
 
 import random
+import sqlite3
 import ssl
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,37 @@ from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 
 from spider import logger
+
+
+class CustomHttpAdapter(requests.adapters.HTTPAdapter):
+    """Transport adapter" that allows us to use custom ssl_context."""
+
+    # ref: https://stackoverflow.com/a/73519818/16493978
+
+    def __init__(self, ssl_context: Any = None, **kwargs: str | Any) -> None:  # noqa: ANN401
+        """Init the ssl_context param."""
+        self.ssl_context = ssl_context
+        super().__init__(**kwargs)
+
+    def init_poolmanager(
+        self, connections: int, maxsize: int, *, block: bool = False
+    ) -> None:
+        """Create a urllib3.PoolManager for each proxy."""
+        self.poolmanager = urllib3.poolmanager.PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            ssl_context=self.ssl_context,
+        )
+
+
+def get_legacy_session() -> requests.Session:
+    """Get legacy session."""
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
+    session = requests.session()
+    session.mount("https://", CustomHttpAdapter(ctx))
+    return session
 
 
 def create_output_dir(tag: str) -> str:
@@ -29,7 +62,8 @@ def create_output_dir(tag: str) -> str:
     return str(directory)
 
 
-def build_driver() -> webdriver:
+# make the headless parameter required
+def build_driver(*, headless: bool) -> webdriver:
     """Init webdriver, don't forget to close it.
 
     During the building process,
@@ -77,7 +111,10 @@ def build_driver() -> webdriver:
 
     options = Options()
     options.add_argument("--no-sandbox")
-    options.add_argument("--headless")
+
+    if headless:
+        options.add_argument("--headless")
+
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
     options.add_experimental_option(
@@ -91,45 +128,48 @@ def build_driver() -> webdriver:
     if PROXY_GROUP:  # local not use proxy
         options.add_argument("--proxy-server=" + random.choice(PROXY_GROUP))
 
-    web = webdriver.Chrome(service=service, options=options)
-    web.execute_script(
+    driver = webdriver.Chrome(service=service, options=options)
+    driver.execute_script(
         'Object.defineProperty(navigator, "webdriver", {get: () => false,});',
     )
 
     logger.info("Building webdriver done")
 
-    return web
+    return driver
 
 
-class CustomHttpAdapter(requests.adapters.HTTPAdapter):
-    """Transport adapter" that allows us to use custom ssl_context."""
-
-    # ref: https://stackoverflow.com/a/73519818/16493978
-
-    def __init__(self, ssl_context: Any = None, **kwargs: str | Any) -> None:  # noqa: ANN401
-        """Init the ssl_context param."""
-        self.ssl_context = ssl_context
-        super().__init__(**kwargs)
-
-    def init_poolmanager(
-        self, connections: int, maxsize: int, *, block: bool = False
-    ) -> None:
-        """Create a urllib3.PoolManager for each proxy."""
-        self.poolmanager = urllib3.poolmanager.PoolManager(
-            num_pools=connections,
-            maxsize=maxsize,
-            block=block,
-            ssl_context=self.ssl_context,
-        )
+def random_sleep() -> None:
+    """Random sleep."""
+    sleep_time = random.uniform(MIN_SLEEP, MAX_SLEEP)
+    logger.info(f"Sleeping for {sleep_time} seconds")
+    time.sleep(sleep_time)
 
 
-def get_legacy_session() -> requests.Session:
-    """Get legacy session."""
-    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
-    session = requests.session()
-    session.mount("https://", CustomHttpAdapter(ctx))
-    return session
+def random_paruse() -> None:
+    """Random pause."""
+    return random.uniform(MIN_PAUSE, MAX_PAUSE)
+
+
+def execute_sql_command(sql: str, path: Path, values: list | None = None) -> Any:  # noqa: ANN401
+    """Execute a SQL command on the database."""
+    try:
+        with sqlite3.connect(path) as connect:
+            cursor = connect.cursor()
+            if values:
+                cursor.execute(sql, values)
+            else:
+                cursor.execute(sql)
+
+            # Fetch results for SELECT queries, otherwise return None for now
+            if sql.strip().upper().startswith("SELECT"):
+                return cursor.fetchall()
+
+    except sqlite3.IntegrityError:
+        logger.warning("SQL integrity error, not unique value")
+
+    except sqlite3.Error as e:
+        logger.warning(f"SQL execution failure of SQLite: {e!s}")
+        raise
 
 
 MAX_RETRIES = 3
@@ -152,7 +192,7 @@ elif PLAT_CODE == 1:
 
 FIREWALL_MESSAGE = "很抱歉，由于您访问的URL有可能对网站造成安全威胁，您的访问被阻断"  # noqa: RUF001
 
-SLIDER_XPATH = '//div[@class="nc_bg"]'
+JOB51_SLIDER_XPATH = '//div[@class="nc_bg"]'
 WAIT_TIME = 10
 MIN_CLICKS = 1
 MAX_CLICKS = 3
@@ -165,11 +205,15 @@ MOVE_DISTANCE = 20
 MOVE_VARIANCE = 0.01
 
 # to avoid circular import
-AREA_SQLITE_FILE_PATH = Path(create_output_dir(tag="area")) / "51area.db"
-JOB_SQLITE_FILE_PATH = Path(create_output_dir(tag="job")) / "51job.db"
+AREA51_SQLITE_FILE_PATH = Path(create_output_dir(tag="area")) / "51area.db"
+JOB51_SQLITE_FILE_PATH = Path(create_output_dir(tag="job")) / "51job.db"
+
+JOBOSS_SQLITE_FILE_PATH = Path(create_output_dir(tag="job")) / "bossjob.db"
+AREABOSS_SQLITE_FILE_PATH = Path(create_output_dir(tag="area")) / "bossarea.db"
+
+BOSS_COOKIES_FILE_PATH = Path(create_output_dir(tag="cookies")) / "BossCookies.json"
 
 # main
-MAX_PAGE_NUM = 20
-STRAT_AREA_CODE = 1
-END_AREA_CODE = None
+MAX_51PAGE_NUM = 20
+MAX_BOSSPAGE_NUM = 10
 KEYWORD = "数据挖掘"

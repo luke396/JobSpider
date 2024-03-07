@@ -7,7 +7,7 @@ import requests
 from fake_useragent import UserAgent
 
 from spider import logger
-from spider.config import AREA_SQLITE_FILE_PATH, PLAT_CODE, get_legacy_session
+from spider.config import AREA51_SQLITE_FILE_PATH, PLAT_CODE, get_legacy_session
 
 
 class AreaSpider51:
@@ -52,7 +52,7 @@ class AreaSpider51:
 
     def save(self, data: list) -> None:
         """Save functions through different types of mappings."""
-        self.save_to_db(data, AREA_SQLITE_FILE_PATH)
+        self.save_to_db(data, AREA51_SQLITE_FILE_PATH)
 
     def save_to_db(self, data: list, output: str) -> None:
         """Save list data to sqlite."""
@@ -86,5 +86,5 @@ def start() -> None:
         logger.warning("No data to save")
         return
 
-    logger.info(f"Saving {len(data)} items to {AREA_SQLITE_FILE_PATH}")
+    logger.info(f"Saving {len(data)} items to {AREA51_SQLITE_FILE_PATH}")
     spider.save(data)

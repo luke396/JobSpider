@@ -3,7 +3,6 @@
 import json
 import random
 import re
-import sqlite3
 import time
 import urllib.parse
 
@@ -11,6 +10,8 @@ from bs4 import BeautifulSoup
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC  # noqa: N812
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -18,43 +19,51 @@ from spider import logger
 from spider.config import (
     FIREWALL_MESSAGE,
     HEIGHT_FACTOR,
-    JOB_SQLITE_FILE_PATH,
+    JOB51_SLIDER_XPATH,
+    JOB51_SQLITE_FILE_PATH,
     MAX_CLICKS,
-    MAX_PAUSE,
     MAX_RETRIES,
-    MAX_SLEEP,
     MIN_CLICKS,
-    MIN_PAUSE,
-    MIN_SLEEP,
     MOVE_DISTANCE,
     MOVE_VARIANCE,
-    SLIDER_XPATH,
     STEPS,
     WAIT_TIME,
     WIDTH_FACTOR,
     build_driver,
+    execute_sql_command,
+    random_paruse,
+    random_sleep,
 )
 
 
 class JobSipder51:
     """This crawler is crawled based on the API."""
 
+    driver: WebDriver
+    url: str
+
     def __init__(self, keyword: str, page: int, area: str) -> None:
         """Init the url param."""
         self.url = self._build_url(keyword, page, area)
-        self.driver = build_driver()
+        self.driver = build_driver(headless=True)
 
     def _slider_verify(self) -> None:
         """Slider verification action."""
         try:
             slider = WebDriverWait(self.driver, WAIT_TIME).until(
-                EC.presence_of_element_located((By.XPATH, SLIDER_XPATH)),
+                EC.presence_of_element_located((By.XPATH, JOB51_SLIDER_XPATH)),
             )
         except TimeoutException:
             logger.warning("Slider not found")
             return
 
         # Add random clicks to simulate human behavior
+        self._random_click()
+        # Break down the movement into smaller steps
+        self._small_move(slider)
+
+    def _random_click(self) -> None:
+        """Add random clicks to simulate human behavior."""
         for _ in range(random.randint(MIN_CLICKS, MAX_CLICKS)):
             # "/WIDTH_FACTOR" and "/HEIGHT_FACTOR" to avoid out of range
             x_offset = random.uniform(
@@ -64,11 +73,12 @@ class JobSipder51:
                 0,
                 self.driver.get_window_size()["height"] / HEIGHT_FACTOR,
             )
-            ActionChains(self.driver).pause(
-                random.uniform(MIN_PAUSE, MAX_PAUSE),
-            ).move_by_offset(x_offset, y_offset).click().perform()
+            ActionChains(self.driver).pause(random_paruse()).move_by_offset(
+                x_offset, y_offset
+            ).click().perform()
 
-        # Break down the movement into smaller steps
+    def _small_move(self, slider: WebElement) -> None:
+        """Break down the movement into smaller steps."""
         action_chains = (
             ActionChains(self.driver).move_to_element(slider).click_and_hold()
         )
@@ -77,10 +87,10 @@ class JobSipder51:
                 MOVE_DISTANCE + random.uniform(0, MOVE_VARIANCE),
                 0,
             )
-            action_chains.pause(random.uniform(MIN_PAUSE, MAX_PAUSE))
+            action_chains.pause(random_paruse())
         action_chains.release().perform()
 
-    def _create_table(self, output: str) -> None:
+    def _create_table(self) -> None:
         """Create table if not exists."""
         sql_table = """CREATE TABLE IF NOT EXISTS `job51` (
                   `jobName` VARCHAR(255) NOT NULL,
@@ -97,15 +107,9 @@ class JobSipder51:
                   PRIMARY KEY (`jobName`,`area`,`companyName`,`issueDate`)
         );"""
 
-        try:
-            with sqlite3.connect(output) as connect:
-                cursor = connect.cursor()
-                cursor.execute(sql_table)
-                connect.commit()
-        except sqlite3.Error as e:
-            logger.warning("Failed to create table in SQLite: " + str(e))
+        execute_sql_command(sql_table, JOB51_SQLITE_FILE_PATH)
 
-    def _insert_to_db(self, detail: dict, output: str) -> None:
+    def _insert_to_db(self, detail: dict) -> None:
         """Insert data to SQLite."""
         sql = """INSERT INTO `job51` VALUES(
             :jobName,
@@ -121,20 +125,14 @@ class JobSipder51:
             :issueDate
         );"""
 
-        try:
-            with sqlite3.connect(output) as connect:
-                cursor = connect.cursor()
-                cursor.execute(sql, detail)
-                connect.commit()
-        except sqlite3.Error as e:
-            logger.warning("SQL execution failure of SQLite: " + str(e))
+        execute_sql_command(sql, JOB51_SQLITE_FILE_PATH, detail)
 
     def save(self, items: json) -> None:
         """Iterate through the dictionary to get each item."""
         if items is None:
             return
 
-        self._create_table(JOB_SQLITE_FILE_PATH)
+        self._create_table()
 
         for _key, item in enumerate(items):
             if "jobAreaLevelDetail" not in item:
@@ -155,8 +153,8 @@ class JobSipder51:
                 "logo": item["companyLogo"],
                 "issueDate": item["issueDateString"],
             }
-            logger.info(f"Saving: {job_detail_dict}")
-            self._insert_to_db(job_detail_dict, JOB_SQLITE_FILE_PATH)
+
+            self._insert_to_db(job_detail_dict)
 
     def _build_url(self, keyword: str, page: int, area: str) -> str:
         """Build the URL for the job search API."""
@@ -230,7 +228,7 @@ class JobSipder51:
 
     def _navigate_to_url(self) -> None:
         """Navigate to the given URL."""
-        time.sleep(random.uniform(MIN_SLEEP, MAX_SLEEP))
+        random_sleep()
         self.driver.get(self.url)
         self._varify_firewall()
 
@@ -244,7 +242,7 @@ class JobSipder51:
     def _bypass_slider_verification(self) -> None:
         """Pass the slider verification."""
         logger.info("Slider verification")
-        time.sleep(random.uniform(MIN_SLEEP, MAX_SLEEP))
+        random_sleep()
         self._slider_verify()
 
     def _parse_html(self) -> json:
@@ -279,5 +277,5 @@ def start(args: dict) -> None:
         logger.warning("No data to save")
         return
 
-    logger.info(f"Saving {len(data_json)} items to {JOB_SQLITE_FILE_PATH}")
+    logger.info(f"Saving {len(data_json)} items to {JOB51_SQLITE_FILE_PATH}")
     spider.save(data_json)
