@@ -34,7 +34,7 @@ class HandlerLogger:
 
     def __set_log_handler(self, log_handler: RotatingFileHandler) -> None:
         """Set log file logging handler."""
-        log_handler.setLevel(logging.INFO)
+        log_handler.setLevel(logging.DEBUG)
         log_handler.setFormatter(self.formatter)
         self.logger.addHandler(log_handler)
 
@@ -44,7 +44,7 @@ class HandlerLogger:
         :Arg:
          - console_handler: console logging handler
         """
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.DEBUG)
         console_handler.setFormatter(self.color_formatter)
         self.logger.addHandler(console_handler)
 

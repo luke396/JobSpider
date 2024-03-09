@@ -17,6 +17,7 @@ from spider.utility import (
     BOSS_COOKIES_FILE_PATH,
     JOBOSS_SQLITE_FILE_PATH,
     MAX_RETRIES,
+    WAIT_TIME,
     build_driver,
     execute_sql_command,
     random_sleep,
@@ -58,7 +59,6 @@ class LoginManager:
         # Wait for login
         start_time = time.time()
         while time.time() - start_time < timeout:
-            time.sleep(0.1)
             self.cookies = self.driver.get_cookies()
             if self._valid_cookie():
                 with Path(BOSS_COOKIES_FILE_PATH).open("w") as f:
@@ -106,7 +106,10 @@ class LoginManager:
 
 
 class JobSpiderBoss:
-    """This is a spider for Boss."""
+    """This is a spider for Boss.
+
+    Crawl one keyword in one city for all pages.
+    """
 
     driver: WebDriver
 
@@ -117,11 +120,10 @@ class JobSpiderBoss:
         self.page = 1
         self.max_page = 10
 
-        self.driver = self._build_driver()
-
     def start(self) -> None:
         """Crawl the job list."""
-        self._create_table()
+        self._build_driver()
+
         while self.page <= self.max_page:
             self.url = self._build_url(self.keyword, self.city)
             self._crwal_sigle_page()
@@ -130,7 +132,7 @@ class JobSpiderBoss:
 
     def _build_driver(self) -> None:
         """Build the driver."""
-        self.driver = build_driver(headless=False)
+        self.driver = build_driver(headless=True)
         # Not login, using other way to avoid the anti-crawler detection
         # LoginManager(self.driver).login() # noqa: ERA001
 
@@ -147,34 +149,31 @@ class JobSpiderBoss:
     def _crwal_sigle_page(self) -> str:
         """Get the HTML from the URL."""
         random_sleep()
-        try:
-            for _ in range(MAX_RETRIES):
-                try:
-                    self.driver.get(self.url)
+        for _ in range(MAX_RETRIES):
+            try:
+                self.driver.get(self.url)
 
-                    job_list = WebDriverWait(self.driver, 60).until(
-                        EC.presence_of_element_located((By.CLASS_NAME, "job-list-box"))
-                    )
+                job_list = WebDriverWait(self.driver, WAIT_TIME).until(
+                    EC.presence_of_element_located((By.CLASS_NAME, "job-list-box"))
+                )
 
-                    max_page = int(
-                        self.driver.find_elements(By.CLASS_NAME, "options-pages")[
-                            0
-                        ].text[-1]
-                    )
-                    if max_page == 0:
-                        self.max_page = 10
-                    else:
-                        self.max_page = int(max_page)
-                    break
+                max_page = int(
+                    self.driver.find_elements(By.CLASS_NAME, "options-pages")[0].text[
+                        -1
+                    ]
+                )
+                if max_page != 0:  # last charactor is 10, but str select 0 out
+                    self.max_page = int(max_page)
+                    logger.info(f"Update max page to {self.max_page}")
+                break
 
-                except TimeoutException:
-                    logger.error("TimeoutException of getting job list, retrying")
-                    self.driver = (
-                        self._build_driver()
-                    )  # rebuild driver, refreshing proxy to retry
-                    continue
-        finally:
-            self.driver.quit()
+            except TimeoutException:
+                logger.error("TimeoutException of getting job list, retrying")
+
+                # rebuild driver, refreshing proxy to retry
+                self.driver.quit()
+                self._build_driver()
+                continue
 
         self._parse_job_list(job_list.get_attribute("innerHTML"))
 
@@ -182,8 +181,8 @@ class JobSpiderBoss:
         """Parse the HTML and get the JSON data."""
         soup = BeautifulSoup(job_list, "html.parser")
         job_card = soup.find_all("li", class_="job-card-wrapper")
-        for job in job_card:
-            self._insert_to_db(self._parse_job(job))
+        jobs = [tuple(self._parse_job(job).values()) for job in job_card]
+        self._insert_to_db(jobs)
 
     def _parse_job(self, job: BeautifulSoup) -> dict:
         job_name = job.find("span", class_="job-name").text
@@ -227,7 +226,7 @@ class JobSpiderBoss:
             "job_other_tags": job_other_tags,
         }
 
-    def _insert_to_db(self, job_data: dict) -> None:
+    def _insert_to_db(self, jobs: dict) -> None:
         """Insert the data into the database."""
         sql = """
         INSERT INTO `joboss` (
@@ -242,28 +241,29 @@ class JobSpiderBoss:
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """
 
-        execute_sql_command(sql, JOBOSS_SQLITE_FILE_PATH, list(job_data.values()))
+        execute_sql_command(sql, JOBOSS_SQLITE_FILE_PATH, jobs)
 
-    def _create_table(self) -> None:
-        """Create the table in the database."""
-        sql_table = """
-        CREATE TABLE IF NOT EXISTS `joboss` (
-            `job_name` TEXT NULL,
-            `area` TEXT NULL,
-            `salary` TEXT NULL,
-            `edu_exp` TEXT NULL,
-            `company_name` TEXT NULL,
-            `company_tag` TEXT NULL,
-            `skill_tags` TEXT NULL,
-            `job_other_tags` TEXT NULL,
-            PRIMARY KEY (`job_name`, `company_name`, `area`, `salary`, `skill_tags`)
-        );
-        """
 
-        execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
+def _create_table() -> None:
+    """Create the table in the database."""
+    sql_table = """
+    CREATE TABLE IF NOT EXISTS `joboss` (
+        `job_name` TEXT NULL,
+        `area` TEXT NULL,
+        `salary` TEXT NULL,
+        `edu_exp` TEXT NULL,
+        `company_name` TEXT NULL,
+        `company_tag` TEXT NULL,
+        `skill_tags` TEXT NULL,
+        `job_other_tags` TEXT NULL,
+        PRIMARY KEY (`job_name`, `company_name`, `area`, `salary`, `skill_tags`)
+    );
+    """
+
+    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
 
 
 def start(keyword: str, area_code: str) -> None:
     """Start the spider."""
+    _create_table()
     JobSpiderBoss(keyword, area_code).start()
-    logger.close()

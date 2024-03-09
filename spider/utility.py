@@ -1,8 +1,11 @@
 """This file is used to store the configuration of the spider."""
 
+import json
+import os
 import random
 import sqlite3
 import ssl
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -63,7 +66,7 @@ def create_output_dir(tag: str) -> str:
 
 
 # make the headless parameter required
-def build_driver(*, headless: bool) -> webdriver:
+def build_driver(*, headless: bool, proxy: str) -> webdriver:
     """Init webdriver, don't forget to close it.
 
     During the building process,
@@ -125,10 +128,7 @@ def build_driver(*, headless: bool) -> webdriver:
     options.add_experimental_option("useAutomationExtension", value=False)
     options.add_argument(f"user-agent={user_agent}")
 
-    if PROXY_GROUP:  # local not use proxy
-        current_proxy = random.choice(PROXY_GROUP)
-        options.add_argument("--proxy-server=" + current_proxy)
-        logger.info(f"Using proxy {current_proxy}")
+    options.add_argument("--proxy-server=" + proxy)
 
     driver = webdriver.Chrome(service=service, options=options)
     driver.execute_script(
@@ -158,7 +158,11 @@ def execute_sql_command(sql: str, path: Path, values: list | None = None) -> Any
         with sqlite3.connect(path) as connect:
             cursor = connect.cursor()
             if values:
-                cursor.execute(sql, values)
+                if sql.strip().upper().startswith("INSERT"):
+                    cursor.executemany(sql, values)
+                    logger.info(f"Insert {len(values)} records")
+                else:
+                    cursor.execute(sql, values)
             else:
                 cursor.execute(sql)
 
@@ -174,29 +178,122 @@ def execute_sql_command(sql: str, path: Path, values: list | None = None) -> Any
         raise
 
 
+class KdlException(Exception):  # noqa: N818
+    """KdlException."""
+
+    def __init__(self, code: str | None = None, message: str | None = None) -> None:
+        """Init KdlException."""
+        self.code = code
+        if sys.version_info[0] < 3 and isinstance(message):  # noqa: PLR2004
+            message = message.encode("utf8")
+        self.message = message
+        self._hint_message = f"[KdlException] code: {self.code} message: {self.message}"
+
+    @property
+    def hint_message(self) -> str:
+        """Get hint message."""
+        return self._hint_message
+
+    @hint_message.setter
+    def hint_message(self, value: str) -> None:
+        """Set hint message."""
+        self._hint_message = value
+
+    def __str__(self) -> str:
+        """Return hint message."""
+        if sys.version_info[0] < 3 and isinstance(self.hint_message):  # noqa: PLR2004
+            self.hint_message = self.hint_message.encode("utf8")
+        return self.hint_message
+
+
+class Proxy:
+    """Class for get proxy."""
+
+    def __init__(self) -> None:
+        """Init Proxy."""
+        self.SECRET_PATH = Path("./.secret")
+        self.SECRET_ID = os.getenv("KUAI_SECRET_ID")
+        self.SECRET_KEY = os.getenv("KUAI_SECRET_KEY")
+        self.SECRET_TOKEN = self.get_secret_token()
+        self.proxies = []
+
+    def _get_secret_token(self) -> tuple[str, str, str]:
+        r = requests.post(
+            url="https://auth.kdlapi.com/api/get_secret_token",
+            data={"secret_id": self.SECRET_ID, "secret_key": self.SECRET_KEY},
+            timeout=10,
+        )
+        if r.status_code != 200:  # noqa: PLR2004
+            raise KdlException(r.status_code, r.content.decode("utf8"))
+        res = json.loads(r.content.decode("utf8"))
+        code, msg = res["code"], res["msg"]
+        if code != 0:
+            raise KdlException(code, msg)
+        secret_token = res["data"]["secret_token"]
+        expire = str(res["data"]["expire"])
+        _time = "%.6f" % time.time()
+        return secret_token, expire, _time
+
+    def _write_secret_token(
+        self, secret_token: str, expire: str, _time: str, secret_id: str
+    ) -> None:
+        try:
+            with Path.open(self.SECRET_PATH, "w") as f:
+                f.write(secret_token + "|" + expire + "|" + _time + "|" + secret_id)
+        except OSError as e:
+            logger.error(f"An error occurred while writing to the file: {e}")
+
+    def _read_secret_token(self) -> str:
+        with Path.open(self.SECRET_PATH) as f:
+            token_info = f.read()
+        secret_token, expire, _time, last_secret_id = token_info.split("|")
+        if (
+            float(_time) + float(expire) - 3 * 60 < time.time()
+            or last_secret_id != self.SECRET_ID
+        ):  # 还有3分钟过期或SecretId变化时更新
+            secret_token, expire, _time = self._get_secret_token()
+            self._write_secret_token(secret_token, expire, _time, self.SECRET_ID)
+        return secret_token
+
+    def get_secret_token(self) -> str:
+        """Get secret token."""
+        if Path.exists(self.SECRET_PATH):
+            secret_token = self._read_secret_token()
+        else:
+            secret_token, expire, _time = self._get_secret_token()
+            self._write_secret_token(secret_token, expire, _time, self.SECRET_ID)
+        return secret_token
+
+    def _get_proxies(self) -> list[str]:
+        """Get a list of proxy ip."""
+        api = "https://dps.kdlapi.com/api/getdps"
+
+        # 请求参数
+        params = {
+            "secret_id": self.SECRET_ID,
+            "signature": self.SECRET_TOKEN,
+            "num": 5,
+        }
+        response = requests.get(api, params=params, timeout=10)
+        self.proxies = [f"http://{ip}" for ip in response.text.split("\n")]
+
+    def get(self) -> str:
+        """Get a proxy ip."""
+        if not self.proxies:
+            self._get_proxies()
+        proxy = self.proxies.pop()
+        logger.info(f"Using proxy {proxy}")
+        return proxy
+
+
 MAX_RETRIES = 3
 MIN_SLEEP = 1
-MAX_SLEEP = 3
+MAX_SLEEP = 1.5
 CHROME_SERVICE_PATH = ChromeDriverManager().install()
 
 # if in wsl/windows - code is 0, should use `get_legacy_session()`
 # else use `requests.get()` - code is 1
-PLAT_CODE = 0
-
-if PLAT_CODE == 0:
-    PROXY_GROUP = None
-elif PLAT_CODE == 1:
-    PROXY_GROUP = [  # set your proxy group
-        "http://localhost:30001",
-        "http://localhost:30002",
-        "http://localhost:30003",
-        "http://localhost:30004",
-        "http://localhost:30005",
-        "http://localhost:30006",
-        "http://localhost:30007",
-        "http://localhost:30008",
-        "http://localhost:30009",
-    ]
+PLAT_CODE = 1
 
 FIREWALL51_MESSAGE = "很抱歉，由于您访问的URL有可能对网站造成安全威胁，您的访问被阻断"  # noqa: RUF001
 
