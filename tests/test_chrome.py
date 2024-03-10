@@ -13,7 +13,7 @@ proxy = {"http": f"http://{proxies.get()}"}
 requests_response = requests.get("https://www.baidu.com", proxies=proxy, timeout=10)
 logger.info(f"Response: {requests_response.text}")
 
-driver = build_driver(headless=True, proxy=proxies.get())
+driver = build_driver(headless=False, proxy=proxies.get())
 driver.get("https://www.baidu.com")
 logger.info(f"Response: {driver.page_source}")
 

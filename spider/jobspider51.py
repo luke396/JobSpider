@@ -18,19 +18,16 @@ from selenium.webdriver.support.ui import WebDriverWait
 from spider import logger
 from spider.utility import (
     FIREWALL51_MESSAGE,
-    HEIGHT_FACTOR,
     JOB51_SLIDER_XPATH,
     JOB51_SQLITE_FILE_PATH,
-    MAX_CLICKS,
     MAX_RETRIES,
-    MIN_CLICKS,
     MOVE_DISTANCE,
     MOVE_VARIANCE,
     STEPS,
     WAIT_TIME,
-    WIDTH_FACTOR,
     build_driver,
     execute_sql_command,
+    random_click,
     random_paruse,
     random_sleep,
 )
@@ -58,24 +55,9 @@ class JobSipder51:
             return
 
         # Add random clicks to simulate human behavior
-        self._random_click()
+        random_click(self.driver)
         # Break down the movement into smaller steps
         self._small_move(slider)
-
-    def _random_click(self) -> None:
-        """Add random clicks to simulate human behavior."""
-        for _ in range(random.randint(MIN_CLICKS, MAX_CLICKS)):
-            # "/WIDTH_FACTOR" and "/HEIGHT_FACTOR" to avoid out of range
-            x_offset = random.uniform(
-                0, self.driver.get_window_size()["width"] / WIDTH_FACTOR
-            )
-            y_offset = random.uniform(
-                0,
-                self.driver.get_window_size()["height"] / HEIGHT_FACTOR,
-            )
-            ActionChains(self.driver).pause(random_paruse()).move_by_offset(
-                x_offset, y_offset
-            ).click().perform()
 
     def _small_move(self, slider: WebElement) -> None:
         """Break down the movement into smaller steps."""

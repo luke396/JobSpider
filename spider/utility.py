@@ -14,6 +14,7 @@ import requests
 import urllib3
 from fake_useragent import UserAgent
 from selenium import webdriver
+from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -132,7 +133,7 @@ def build_driver(*, headless: bool, proxy: str) -> webdriver:
 
     driver = webdriver.Chrome(service=service, options=options)
     driver.execute_script(
-        'Object.defineProperty(navigator, "webdriver", {get: () => false,});',
+        'Object.defineProperty(navigator, "webdriver", {get: () => undefined});',
     )
 
     logger.info("Building webdriver done")
@@ -178,6 +179,30 @@ def execute_sql_command(sql: str, path: Path, values: list | None = None) -> Any
         raise
 
 
+def random_click(driver: webdriver, fraction: float = 1.0) -> None:
+    """Add random clicks to simulate human behavior."""
+    for _ in range(random.randint(MIN_CLICKS, MAX_CLICKS)):
+        # "/WIDTH_FACTOR" and "/HEIGHT_FACTOR" to avoid out of range
+        x_offset = random.uniform(
+            0, driver.get_window_size()["width"] / fraction / WIDTH_FACTOR
+        )
+        y_offset = random.uniform(
+            0,
+            driver.get_window_size()["height"] / fraction / HEIGHT_FACTOR,
+        )
+        ActionChains(driver).pause(random_paruse()).move_by_offset(
+            x_offset, y_offset
+        ).click().perform()
+
+
+def random_scroll(driver: webdriver) -> None:
+    """Scrolls down the page by a random amount."""
+    random_paruse()
+    scroll_height = driver.execute_script("return document.body.scrollHeight")
+    scroll_target = random.randint(0, scroll_height)
+    driver.execute_script(f"window.scrollTo(0, {scroll_target});")
+
+
 class KdlException(Exception):  # noqa: N818
     """KdlException."""
 
@@ -211,7 +236,7 @@ class Proxy:
 
     def __init__(self) -> None:
         """Init Proxy."""
-        self.SECRET_PATH = Path("./.secret")
+        self.SECRET_PATH = Path(__file__).resolve().parent.parent / ".secret"
         self.SECRET_ID = os.getenv("KUAI_SECRET_ID")
         self.SECRET_KEY = os.getenv("KUAI_SECRET_KEY")
         self.SECRET_TOKEN = self.get_secret_token()
@@ -272,7 +297,7 @@ class Proxy:
         params = {
             "secret_id": self.SECRET_ID,
             "signature": self.SECRET_TOKEN,
-            "num": 5,
+            "num": 1,
         }
         response = requests.get(api, params=params, timeout=10)
         self.proxies = [f"http://{ip}" for ip in response.text.split("\n")]

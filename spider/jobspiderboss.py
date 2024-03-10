@@ -20,6 +20,8 @@ from spider.utility import (
     WAIT_TIME,
     build_driver,
     execute_sql_command,
+    random_click,
+    random_scroll,
     random_sleep,
 )
 
@@ -121,18 +123,21 @@ class JobSpiderBoss:
         self.max_page = 10
 
     def start(self) -> None:
-        """Crawl the job list."""
+        """Crawl by building the page url."""
         self._build_driver()
 
         while self.page <= self.max_page:
             self.url = self._build_url(self.keyword, self.city)
-            self._crwal_sigle_page()
+            self._crwal_sigle_page_by_url()
+
+            if self.page == 1:
+                self._get_max_page()
             self.page += 1
         self.driver.quit()
 
     def _build_driver(self) -> None:
         """Build the driver."""
-        self.driver = build_driver(headless=True)
+        self.driver = build_driver(headless=False, proxy="")
         # Not login, using other way to avoid the anti-crawler detection
         # LoginManager(self.driver).login() # noqa: ERA001
 
@@ -142,40 +147,53 @@ class JobSpiderBoss:
         query_params = urllib.parse.urlencode(
             {"query": keyword, "city": city, "page": self.page}
         )
-        url = f"{base_url}?{query_params}"
-        logger.info(f"Crawling {self.city} of page-{self.page}, {url}")
-        return url
+        return f"{base_url}?{query_params}"
 
-    def _crwal_sigle_page(self) -> str:
+    def _crwal_sigle_page_by_url(self) -> str:
         """Get the HTML from the URL."""
         random_sleep()
         for _ in range(MAX_RETRIES):
             try:
-                self.driver.get(self.url)
+                self._get()
 
-                job_list = WebDriverWait(self.driver, WAIT_TIME).until(
-                    EC.presence_of_element_located((By.CLASS_NAME, "job-list-box"))
+                job_list = (
+                    WebDriverWait(self.driver, WAIT_TIME)
+                    .until(
+                        EC.presence_of_element_located((By.CLASS_NAME, "job-list-box"))
+                    )
+                    .get_attribute("innerHTML")
                 )
 
-                max_page = int(
-                    self.driver.find_elements(By.CLASS_NAME, "options-pages")[0].text[
-                        -1
-                    ]
-                )
-                if max_page != 0:  # last charactor is 10, but str select 0 out
-                    self.max_page = int(max_page)
-                    logger.info(f"Update max page to {self.max_page}")
+                random_click(self.driver, 10.0)
+                random_scroll(self.driver)
                 break
 
             except TimeoutException:
                 logger.error("TimeoutException of getting job list, retrying")
-
                 # rebuild driver, refreshing proxy to retry
                 self.driver.quit()
                 self._build_driver()
                 continue
 
-        self._parse_job_list(job_list.get_attribute("innerHTML"))
+        self._parse_job_list(job_list)
+
+    def _get(self) -> None:
+        self.driver.get(self.url)
+        logger.info(f"Crawling {self.url}")
+
+    def _get_max_page(self) -> None:
+        max_page = int(
+            self.driver.find_elements(By.CLASS_NAME, "options-pages")[0].text[-1]
+        )
+        if max_page != 0:  # last charactor is 10, but str select 0 out
+            self.max_page = int(max_page)
+            logger.info(f"Update max page to {self.max_page}")
+
+    def _click_arrow(self) -> None:
+        """Finds the element with class 'ui-icon-arrow-right' and clicks it."""
+        element = self.driver.find_element_by_class_name("ui-icon-arrow-right")
+        if element.is_enabled():
+            element.click()
 
     def _parse_job_list(self, job_list: str) -> None:
         """Parse the HTML and get the JSON data."""
