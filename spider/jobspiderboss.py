@@ -139,7 +139,7 @@ class JobSpiderBoss:
 
     def _build_driver(self) -> None:
         """Build the driver."""
-        self.driver = build_driver(headless=False, proxy=Proxy(local=True).get())
+        self.driver = build_driver(headless=False, proxy=Proxy(local=False).get())
         # Not login, using other way to avoid the anti-crawler detection
         # LoginManager(self.driver).login() # noqa: ERA001
 

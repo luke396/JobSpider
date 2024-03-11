@@ -8,13 +8,14 @@ import requests
 from spider import logger
 from spider.utility import Proxy, build_driver
 
-proxies = Proxy(local=True)
+proxy = Proxy(local=False).get()
+
 requests_response = requests.get(
-    "https://www.baidu.com", proxies={"http": f"http://{proxies.get()}"}, timeout=10
+    "https://www.baidu.com", proxies={"http": proxy}, timeout=10
 )
 logger.info(f"Response: {requests_response.text}")
 
-driver = build_driver(headless=False, proxy=proxies.get())
+driver = build_driver(headless=True, proxy=proxy)
 driver.get("https://www.baidu.com")
 logger.info(f"Response: {driver.page_source}")
 

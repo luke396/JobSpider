@@ -129,7 +129,7 @@ def build_driver(*, headless: bool, proxy: str) -> webdriver:
     options.add_experimental_option("useAutomationExtension", value=False)
     options.add_argument(f"user-agent={user_agent}")
 
-    options.add_argument("--proxy-server=" + proxy)
+    options.add_argument(f"--proxy-server={proxy}")
 
     driver = webdriver.Chrome(service=service, options=options)
     driver.execute_script(
@@ -242,9 +242,10 @@ class Proxy:
 
         if not self.local:
             self.SECRET_PATH = Path(__file__).resolve().parent.parent / ".secret"
+            if not self.SECRET_PATH.exists():
+                Path.touch(self.SECRET_PATH)
             self.SECRET_ID = os.getenv("KUAI_SECRET_ID")
             self.SECRET_KEY = os.getenv("KUAI_SECRET_KEY")
-            self.SECRET_TOKEN = self._get_secret_token()
             self.proxies = []
 
     def _get_secret_token(self) -> tuple[str, str, str]:
@@ -276,6 +277,10 @@ class Proxy:
     def _read_secret_token(self) -> str:
         with Path.open(self.SECRET_PATH) as f:
             token_info = f.read()
+            if token_info == "":
+                secret_token, expire, _time = self._get_secret_token()
+                self._write_secret_token(secret_token, expire, _time, self.SECRET_ID)
+                return secret_token
         secret_token, expire, _time, last_secret_id = token_info.split("|")
         if (
             float(_time) + float(expire) - 3 * 60 < time.time()
@@ -285,26 +290,20 @@ class Proxy:
             self._write_secret_token(secret_token, expire, _time, self.SECRET_ID)
         return secret_token
 
-    def _get_secret_token(self) -> str:
-        """Get secret token."""
-        if Path.exists(self.SECRET_PATH):
-            secret_token = self._read_secret_token()
-        else:
-            secret_token, expire, _time = self._get_secret_token()
-            self._write_secret_token(secret_token, expire, _time, self.SECRET_ID)
-        return secret_token
-
     def _get_proxies(self) -> list[str]:
         """Get a list of proxy ip."""
         api = "https://dps.kdlapi.com/api/getdps"
+        secret_token = self._read_secret_token()
 
         # 请求参数
         params = {
             "secret_id": self.SECRET_ID,
-            "signature": self.SECRET_TOKEN,
+            "signature": secret_token,
             "num": 1,
         }
         response = requests.get(api, params=params, timeout=10)
+        if response.status_code != 200:  # noqa: PLR2004
+            raise KdlException(response.status_code, response.content.decode("utf8"))
         self.proxies = [f"http://{ip}" for ip in response.text.split("\n")]
 
     def get(self) -> str:
@@ -328,7 +327,7 @@ CHROME_SERVICE_PATH = ChromeDriverManager().install()
 
 # if in wsl/windows - code is 0, should use `get_legacy_session()`
 # else use `requests.get()` - code is 1
-PLAT_CODE = 0
+PLAT_CODE = 1
 PROXY_GROUP = [
     "http://localhost:30001",
     "http://localhost:30002",
