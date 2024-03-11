@@ -53,5 +53,5 @@ def joboss_spider() -> None:
 
 
 if __name__ == "__main__":
-    joboss_spider()
+    job51_spider()
     logger.close()

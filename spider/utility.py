@@ -159,7 +159,9 @@ def execute_sql_command(sql: str, path: Path, values: list | None = None) -> Any
         with sqlite3.connect(path) as connect:
             cursor = connect.cursor()
             if values:
-                if sql.strip().upper().startswith("INSERT"):
+                if sql.strip().upper().startswith("INSERT") and isinstance(
+                    values, list
+                ):
                     cursor.executemany(sql, values)
                     logger.info(f"Insert {len(values)} records")
                 else:
@@ -234,13 +236,16 @@ class KdlException(Exception):  # noqa: N818
 class Proxy:
     """Class for get proxy."""
 
-    def __init__(self) -> None:
+    def __init__(self, *local: bool) -> None:
         """Init Proxy."""
-        self.SECRET_PATH = Path(__file__).resolve().parent.parent / ".secret"
-        self.SECRET_ID = os.getenv("KUAI_SECRET_ID")
-        self.SECRET_KEY = os.getenv("KUAI_SECRET_KEY")
-        self.SECRET_TOKEN = self.get_secret_token()
-        self.proxies = []
+        self.local = local
+
+        if not self.local:
+            self.SECRET_PATH = Path(__file__).resolve().parent.parent / ".secret"
+            self.SECRET_ID = os.getenv("KUAI_SECRET_ID")
+            self.SECRET_KEY = os.getenv("KUAI_SECRET_KEY")
+            self.SECRET_TOKEN = self._get_secret_token()
+            self.proxies = []
 
     def _get_secret_token(self) -> tuple[str, str, str]:
         r = requests.post(
@@ -280,7 +285,7 @@ class Proxy:
             self._write_secret_token(secret_token, expire, _time, self.SECRET_ID)
         return secret_token
 
-    def get_secret_token(self) -> str:
+    def _get_secret_token(self) -> str:
         """Get secret token."""
         if Path.exists(self.SECRET_PATH):
             secret_token = self._read_secret_token()
@@ -304,6 +309,11 @@ class Proxy:
 
     def get(self) -> str:
         """Get a proxy ip."""
+        if self.local and PLAT_CODE == 1:
+            return random.choice(PROXY_GROUP)
+        if self.local and PLAT_CODE == 0:
+            return ""
+
         if not self.proxies:
             self._get_proxies()
         proxy = self.proxies.pop()
@@ -319,6 +329,17 @@ CHROME_SERVICE_PATH = ChromeDriverManager().install()
 # if in wsl/windows - code is 0, should use `get_legacy_session()`
 # else use `requests.get()` - code is 1
 PLAT_CODE = 1
+PROXY_GROUP = [
+    "http://localhost:30001",
+    "http://localhost:30002",
+    "http://localhost:30003",
+    "http://localhost:30004",
+    "http://localhost:30005",
+    "http://localhost:30006",
+    "http://localhost:30007",
+    "http://localhost:30008",
+    "http://localhost:30009",
+]
 
 FIREWALL51_MESSAGE = "很抱歉，由于您访问的URL有可能对网站造成安全威胁，您的访问被阻断"  # noqa: RUF001
 

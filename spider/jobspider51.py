@@ -25,6 +25,7 @@ from spider.utility import (
     MOVE_VARIANCE,
     STEPS,
     WAIT_TIME,
+    Proxy,
     build_driver,
     execute_sql_command,
     random_click,
@@ -42,7 +43,7 @@ class JobSipder51:
     def __init__(self, keyword: str, page: int, area: str) -> None:
         """Init the url param."""
         self.url = self._build_url(keyword, page, area)
-        self.driver = build_driver(headless=True)
+        self.driver = build_driver(headless=True, proxy=Proxy(local=True).get())
 
     def _slider_verify(self) -> None:
         """Slider verification action."""
@@ -93,50 +94,53 @@ class JobSipder51:
 
     def _insert_to_db(self, detail: dict) -> None:
         """Insert data to SQLite."""
-        sql = """INSERT INTO `job51` VALUES(
-            :jobName,
-            :tags,
-            :area,
-            :salary,
-            :workYear,
-            :degree,
-            :companyName,
-            :companyType,
-            :companySize,
-            :logo,
-            :issueDate
-        );"""
+        sql = """INSERT INTO `job51` (
+            `jobName`,
+            `tags`,
+            `area`,
+            `salary`,
+            `workYear`,
+            `degree`,
+            `companyName`,
+            `companyType`,
+            `companySize`,
+            `logo`,
+            `issueDate`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
 
         execute_sql_command(sql, JOB51_SQLITE_FILE_PATH, detail)
 
     def save(self, items: json) -> None:
         """Iterate through the dictionary to get each item."""
-        if items is None:
+        if not items:
             return
 
         self._create_table()
 
-        for _key, item in enumerate(items):
-            if "jobAreaLevelDetail" not in item:
-                item["jobAreaLevelDetail"] = item["jobAreaString"]
-
-            job_detail_dict = {
-                "jobName": item["jobName"],
-                "tags": ",".join(item["jobTags"]),
+        jobs = [
+            {
+                "jobName": item.get("jobName"),
+                "tags": ",".join(item.get("jobTags", [])),
                 "area": "".join(
-                    re.findall(r"[\u4e00-\u9fa5]+", str(item["jobAreaLevelDetail"])),
+                    re.findall(
+                        r"[\u4e00-\u9fa5]+",
+                        str(item.get("jobAreaLevelDetail", item.get("jobAreaString"))),
+                    )
                 ),
-                "salary": item["provideSalaryString"],
-                "workYear": item["workYearString"],
-                "degree": item["degreeString"],
-                "companyName": item["fullCompanyName"],
-                "companyType": item["companyTypeString"],
-                "companySize": item["companySizeString"],
-                "logo": item["companyLogo"],
-                "issueDate": item["issueDateString"],
+                "salary": item.get("provideSalaryString"),
+                "workYear": item.get("workYearString"),
+                "degree": item.get("degreeString"),
+                "companyName": item.get("fullCompanyName"),
+                "companyType": item.get("companyTypeString"),
+                "companySize": item.get("companySizeString"),
+                "logo": item.get("companyLogo"),
+                "issueDate": item.get("issueDateString"),
             }
+            for item in items
+        ]
 
-            self._insert_to_db(job_detail_dict)
+        self._insert_to_db([tuple(job.values()) for job in jobs])
 
     def _build_url(self, keyword: str, page: int, area: str) -> str:
         """Build the URL for the job search API."""

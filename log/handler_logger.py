@@ -34,7 +34,7 @@ class HandlerLogger:
 
     def __set_log_handler(self, log_handler: RotatingFileHandler) -> None:
         """Set log file logging handler."""
-        log_handler.setLevel(logging.DEBUG)
+        log_handler.setLevel(logging.INFO)
         log_handler.setFormatter(self.formatter)
         self.logger.addHandler(log_handler)
 

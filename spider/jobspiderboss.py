@@ -18,6 +18,7 @@ from spider.utility import (
     JOBOSS_SQLITE_FILE_PATH,
     MAX_RETRIES,
     WAIT_TIME,
+    Proxy,
     build_driver,
     execute_sql_command,
     random_click,
@@ -137,7 +138,7 @@ class JobSpiderBoss:
 
     def _build_driver(self) -> None:
         """Build the driver."""
-        self.driver = build_driver(headless=False, proxy="")
+        self.driver = build_driver(headless=True, proxy=Proxy(local=True).get())
         # Not login, using other way to avoid the anti-crawler detection
         # LoginManager(self.driver).login() # noqa: ERA001
 
@@ -152,6 +153,7 @@ class JobSpiderBoss:
     def _crwal_sigle_page_by_url(self) -> str:
         """Get the HTML from the URL."""
         random_sleep()
+        job_list = None
         for _ in range(MAX_RETRIES):
             try:
                 self._get()
@@ -163,6 +165,10 @@ class JobSpiderBoss:
                     )
                     .get_attribute("innerHTML")
                 )
+
+                if job_list is None:
+                    logger.error("job_list is None, maybe proxy is blocked, retrying")
+                    break
 
                 random_click(self.driver, 10.0)
                 random_scroll(self.driver)
