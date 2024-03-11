@@ -1,5 +1,6 @@
 """Main function of the project."""
 
+import random
 from pathlib import Path
 
 from spider import areaspider51, areaspiderboss, jobspider51, jobspiderboss, logger
@@ -47,11 +48,13 @@ def joboss_spider() -> None:
         """SELECT `code`, `name` FROM `areaboss`;""", AREABOSS_SQLITE_FILE_PATH
     )
 
-    for area in areas:
+    while areas:
+        area = random.choice(areas)
+        areas.remove(area)
         logger.info(f"Crawling area-{area[1]}")
         jobspiderboss.start(keyword=KEYWORD, area_code=area[0])
 
 
 if __name__ == "__main__":
-    job51_spider()
+    joboss_spider()
     logger.close()

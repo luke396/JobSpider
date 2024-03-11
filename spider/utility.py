@@ -236,7 +236,7 @@ class KdlException(Exception):  # noqa: N818
 class Proxy:
     """Class for get proxy."""
 
-    def __init__(self, *local: bool) -> None:
+    def __init__(self, *, local: bool) -> None:
         """Init Proxy."""
         self.local = local
 
@@ -328,7 +328,7 @@ CHROME_SERVICE_PATH = ChromeDriverManager().install()
 
 # if in wsl/windows - code is 0, should use `get_legacy_session()`
 # else use `requests.get()` - code is 1
-PLAT_CODE = 1
+PLAT_CODE = 0
 PROXY_GROUP = [
     "http://localhost:30001",
     "http://localhost:30002",

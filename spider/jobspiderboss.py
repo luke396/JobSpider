@@ -125,20 +125,21 @@ class JobSpiderBoss:
 
     def start(self) -> None:
         """Crawl by building the page url."""
-        self._build_driver()
-
         while self.page <= self.max_page:
+            self._build_driver()
+
             self.url = self._build_url(self.keyword, self.city)
             self._crwal_sigle_page_by_url()
 
+            self.page += 1
             if self.page == 1:
                 self._get_max_page()
-            self.page += 1
-        self.driver.quit()
+
+            self.driver.quit()
 
     def _build_driver(self) -> None:
         """Build the driver."""
-        self.driver = build_driver(headless=True, proxy=Proxy(local=True).get())
+        self.driver = build_driver(headless=False, proxy=Proxy(local=True).get())
         # Not login, using other way to avoid the anti-crawler detection
         # LoginManager(self.driver).login() # noqa: ERA001
 
@@ -152,11 +153,12 @@ class JobSpiderBoss:
 
     def _crwal_sigle_page_by_url(self) -> str:
         """Get the HTML from the URL."""
-        random_sleep()
         job_list = None
         for _ in range(MAX_RETRIES):
             try:
+                random_sleep()
                 self._get()
+                random_click(self.driver, 5.0)
 
                 job_list = (
                     WebDriverWait(self.driver, WAIT_TIME)
