@@ -44,7 +44,7 @@ class HandlerLogger:
         :Arg:
          - console_handler: console logging handler
         """
-        console_handler.setLevel(logging.DEBUG)
+        console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(self.color_formatter)
         self.logger.addHandler(console_handler)
 
@@ -93,45 +93,25 @@ class HandlerLogger:
             },
         )
 
-    def debug(self, message: str) -> None:
-        """Log msg with severity 'DEBUG'.
+    def debug(self, message: str, *args) -> None:  # noqa: ANN002
+        """Log msg with severity 'DEBUG'."""
+        self.logger.debug(message, *args)
 
-        :Arg
-         - message: Log message
-        """
-        self.logger.debug(message)
+    def info(self, message: str, *args) -> None:  # noqa: ANN002
+        """Log msg with severity 'INFO'."""
+        self.logger.info(message, *args)
 
-    def info(self, message: str) -> None:
-        """Log msg with severity 'INFO'.
+    def warning(self, message: str, *args) -> None:  # noqa: ANN002
+        """Log msg with severity 'WARNING'."""
+        self.logger.warning(message, *args)
 
-        :Arg
-         - message: Log message
-        """
-        self.logger.info(message)
+    def error(self, message: str, *args) -> None:  # noqa: ANN002
+        """Log msg with severity 'ERROR'."""
+        self.logger.error(message, *args)
 
-    def warning(self, message: str) -> None:
-        """Log msg with severity 'WARNING'.
-
-        :Arg
-         - message: log message
-        """
-        self.logger.warning(message)
-
-    def error(self, message: str) -> None:
-        """Log msg with severity 'ERROR'.
-
-        :Arg
-         - message: log message
-        """
-        self.logger.error(message)
-
-    def critical(self, message: str) -> None:
-        """Log msg with severity 'CRITICAL'.
-
-        :Arg
-         - message: log message
-        """
-        self.logger.critical(message)
+    def critical(self, message: str, *args) -> None:  # noqa: ANN002
+        """Log msg with severity 'CRITICAL'."""
+        self.logger.critical(message, *args)
 
     def close(self) -> None:
         """Logger close."""

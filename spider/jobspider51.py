@@ -16,22 +16,24 @@ from selenium.webdriver.support import expected_conditions as EC  # noqa: N812
 from selenium.webdriver.support.ui import WebDriverWait
 
 from spider import logger
-from spider.utility import (
+from spider.utility.constant import (
     FIREWALL51_MESSAGE,
     JOB51_SLIDER_XPATH,
-    JOB51_SQLITE_FILE_PATH,
     MAX_RETRIES,
     MOVE_DISTANCE,
     MOVE_VARIANCE,
     STEPS,
     WAIT_TIME,
-    Proxy,
+)
+from spider.utility.path import JOB51_SQLITE_FILE_PATH
+from spider.utility.proxy import Proxy
+from spider.utility.selenium_ext import (
     build_driver,
-    execute_sql_command,
     random_click,
     random_paruse,
     random_sleep,
 )
+from spider.utility.sql import execute_sql_command
 
 
 class JobSipder51:

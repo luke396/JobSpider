@@ -7,7 +7,8 @@ import requests
 from fake_useragent import UserAgent
 
 from spider import logger
-from spider.utility import AREA51_SQLITE_FILE_PATH, PLAT_CODE, get_legacy_session
+from spider.utility.constant import AREA51_SQLITE_FILE_PATH, PLAT_CODE
+from spider.utility.proxy import get_legacy_session
 
 
 class AreaSpider51:

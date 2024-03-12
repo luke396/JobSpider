@@ -1,23 +1,32 @@
 # Used for testing the Chrome browser with selenium
+
 # If you not install webdriver,
 # this script will install it automatically by webdriver_manager
 
 # Notice that, ipv6 will cause some error, diable it if you have.
 import requests
 
-from spider import logger
-from spider.utility import Proxy, build_driver
+from log import handler_logger
+from spider.utility.proxy import Proxy
+from spider.utility.selenium_ext import build_driver
 
-proxy = Proxy(local=False).get()
 
-requests_response = requests.get(
-    "https://www.baidu.com", proxies={"http": proxy}, timeout=10
-)
-logger.info(f"Response: {requests_response.text}")
+def test() -> None:
+    logger = handler_logger.HandlerLogger(filename="test.log")
+    proxy = Proxy(local=True).get()
 
-driver = build_driver(headless=True, proxy=proxy)
-driver.get("https://www.baidu.com")
-logger.info(f"Response: {driver.page_source}")
+    requests_response = requests.get(
+        "https://www.baidu.com", proxies={"http": proxy}, timeout=10
+    )
+    logger.info("Response: %s", requests_response.text)
 
-driver.quit()
-logger.close()
+    driver = build_driver(headless=False, proxy=proxy)
+    driver.get("https://www.baidu.com")
+    logger.info("Response: %s", driver.page_source)
+
+    driver.quit()
+    logger.close()
+
+
+if __name__ == "__main__":
+    test()

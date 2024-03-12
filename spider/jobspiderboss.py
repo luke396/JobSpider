@@ -13,18 +13,19 @@ from selenium.webdriver.support import expected_conditions as EC  # noqa: N812
 from selenium.webdriver.support.ui import WebDriverWait
 
 from spider import logger
-from spider.utility import (
-    BOSS_COOKIES_FILE_PATH,
-    JOBOSS_SQLITE_FILE_PATH,
+from spider.utility.constant import (
     MAX_RETRIES,
     WAIT_TIME,
-    Proxy,
+)
+from spider.utility.path import BOSS_COOKIES_FILE_PATH, JOBOSS_SQLITE_FILE_PATH
+from spider.utility.proxy import Proxy
+from spider.utility.selenium_ext import (
     build_driver,
-    execute_sql_command,
     random_click,
     random_scroll,
     random_sleep,
 )
+from spider.utility.sql import execute_sql_command
 
 # Boss limit 10 pages for each query
 # if add more query keywords, result will be different
@@ -122,26 +123,21 @@ class JobSpiderBoss:
         self.city = city
         self.page = 1
         self.max_page = 10
+        self.proxy = Proxy(local=True)
 
     def start(self) -> None:
         """Crawl by building the page url."""
         while self.page <= self.max_page:
             self._build_driver()
-
             self.url = self._build_url(self.keyword, self.city)
             self._crwal_sigle_page_by_url()
 
-            self.page += 1
             if self.page == 1:
                 self._get_max_page()
 
-            self.driver.quit()
+            self.page += 1
 
-    def _build_driver(self) -> None:
-        """Build the driver."""
-        self.driver = build_driver(headless=False, proxy=Proxy(local=False).get())
-        # Not login, using other way to avoid the anti-crawler detection
-        # LoginManager(self.driver).login() # noqa: ERA001
+            self.driver.quit()
 
     def _build_url(self, keyword: str, city: str) -> str:
         """Build the URL for the job search."""
@@ -151,14 +147,15 @@ class JobSpiderBoss:
         )
         return f"{base_url}?{query_params}"
 
+    def _build_driver(self) -> WebDriver:
+        self.driver = build_driver(headless=False, proxy=self.proxy.get())
+
     def _crwal_sigle_page_by_url(self) -> str:
         """Get the HTML from the URL."""
         job_list = None
         for _ in range(MAX_RETRIES):
             try:
-                random_sleep()
                 self._get()
-                random_click(self.driver, 5.0)
 
                 job_list = (
                     WebDriverWait(self.driver, WAIT_TIME)
@@ -186,8 +183,12 @@ class JobSpiderBoss:
         self._parse_job_list(job_list)
 
     def _get(self) -> None:
-        self.driver.get(self.url)
         logger.info(f"Crawling {self.url}")
+        random_sleep()
+
+        self.driver.get(self.url)
+        random_sleep()
+        random_click(self.driver, 5.0)
 
     def _get_max_page(self) -> None:
         max_page = int(
@@ -196,12 +197,6 @@ class JobSpiderBoss:
         if max_page != 0:  # last charactor is 10, but str select 0 out
             self.max_page = int(max_page)
             logger.info(f"Update max page to {self.max_page}")
-
-    def _click_arrow(self) -> None:
-        """Finds the element with class 'ui-icon-arrow-right' and clicks it."""
-        element = self.driver.find_element_by_class_name("ui-icon-arrow-right")
-        if element.is_enabled():
-            element.click()
 
     def _parse_job_list(self, job_list: str) -> None:
         """Parse the HTML and get the JSON data."""
