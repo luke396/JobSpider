@@ -1,10 +1,7 @@
 """This is a spider for Boss."""
 
-import json
 import random
-import time
 import urllib.parse
-from pathlib import Path
 
 from bs4 import BeautifulSoup
 from selenium.common.exceptions import TimeoutException
@@ -18,7 +15,7 @@ from utility.constant import (
     MAX_RETRIES,
     WAIT_TIME,
 )
-from utility.path import BOSS_COOKIES_FILE_PATH, JOBOSS_SQLITE_FILE_PATH
+from utility.path import JOBOSS_SQLITE_FILE_PATH
 from utility.proxy import Proxy
 from utility.selenium_ext import (
     build_driver,
@@ -30,84 +27,6 @@ from utility.sql import execute_sql_command
 
 # Boss limit 10 pages for each query
 # if add more query keywords, result will be different
-
-
-class LoginManager:
-    """Login manager for Boss."""
-
-    def __init__(self, driver: WebDriver) -> None:
-        """Init."""
-        self.driver = driver
-        self.cookies = None
-        self.url = "https://www.zhipin.com/web/user/?ka=header-login"
-
-    def login(self, timeout: int = 60) -> None:
-        """Login and get cookies within timeout."""
-        logger.info("Start to login")
-        if self._cache_login():
-            logger.info("Login success using cache cookies")
-            return
-
-        self._login_manually(timeout)
-
-    def _login_force(self) -> None:
-        """Force login."""
-        self._clear_cookies()
-        self._login_manually()
-
-    def _login_manually(self, timeout: int = 60) -> None:
-        """Login manually."""
-        logger.info("Please login manually")
-        self.driver.get(self.url)
-        self.cookies = self.driver.get_cookies()
-
-        # Wait for login
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            self.cookies = self.driver.get_cookies()
-            if self._valid_cookie():
-                with Path(BOSS_COOKIES_FILE_PATH).open("w") as f:
-                    json.dump(self.cookies, f)
-                logger.info("Login success")
-                break
-        else:
-            logger.error("Login timed out")
-
-    def _cache_login(self) -> bool:
-        """Login and get cookies."""
-        self._read_cookies()
-        if self._valid_cookie():
-            self._update_cookies()
-            return True
-        return False
-
-    def _valid_cookie(self) -> bool:
-        """Check if the cookies are valid."""
-        if self.cookies is None:
-            return False
-        cookie_names = {cookie["name"] for cookie in self.cookies}
-        required_cookies = {"geek_zp_token", "zp_at"}
-        return required_cookies.issubset(cookie_names)
-
-    def _clear_cookies(self) -> None:
-        """Clear cookies."""
-        self.driver.delete_all_cookies()
-        self.cookies = None
-        if Path(BOSS_COOKIES_FILE_PATH).exists():
-            Path.unlink(BOSS_COOKIES_FILE_PATH)
-
-    def _read_cookies(self) -> None:
-        """Read cookies from file."""
-        if Path(BOSS_COOKIES_FILE_PATH).exists():
-            with Path(BOSS_COOKIES_FILE_PATH).open("r") as f:
-                self.cookies = json.load(f)
-
-    def _update_cookies(self) -> None:
-        """Update cookies."""
-        self.driver.get(self.url)
-        for cookie in self.cookies:
-            self.driver.add_cookie(cookie)
-        logger.info("Update cookies")
 
 
 class JobSpiderBoss:

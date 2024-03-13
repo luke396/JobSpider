@@ -45,7 +45,7 @@ class JobSipder51:
     def __init__(self, keyword: str, page: int, area: str) -> None:
         """Init the url param."""
         self.url = self._build_url(keyword, page, area)
-        self.driver = build_driver(headless=True, proxy=Proxy(local=True).get())
+        self.driver = build_driver(headless=False, proxy=Proxy(local=True).get())
 
     def _slider_verify(self) -> None:
         """Slider verification action."""
