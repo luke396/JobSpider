@@ -7,8 +7,8 @@
 import requests
 
 from log import handler_logger
-from spider.utility.proxy import Proxy
-from spider.utility.selenium_ext import build_driver
+from utility.proxy import Proxy
+from utility.selenium_ext import build_driver
 
 
 def test() -> None:

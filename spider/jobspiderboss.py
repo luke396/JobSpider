@@ -13,19 +13,19 @@ from selenium.webdriver.support import expected_conditions as EC  # noqa: N812
 from selenium.webdriver.support.ui import WebDriverWait
 
 from spider import logger
-from spider.utility.constant import (
+from utility.constant import (
     MAX_RETRIES,
     WAIT_TIME,
 )
-from spider.utility.path import BOSS_COOKIES_FILE_PATH, JOBOSS_SQLITE_FILE_PATH
-from spider.utility.proxy import Proxy
-from spider.utility.selenium_ext import (
+from utility.path import BOSS_COOKIES_FILE_PATH, JOBOSS_SQLITE_FILE_PATH
+from utility.proxy import Proxy
+from utility.selenium_ext import (
     build_driver,
     random_click,
     random_scroll,
     random_sleep,
 )
-from spider.utility.sql import execute_sql_command
+from utility.sql import execute_sql_command
 
 # Boss limit 10 pages for each query
 # if add more query keywords, result will be different
@@ -123,14 +123,13 @@ class JobSpiderBoss:
         self.city = city
         self.page = 1
         self.max_page = 10
-        self.proxy = Proxy(local=True)
+        self.proxy = Proxy(local=False)
 
     def start(self) -> None:
         """Crawl by building the page url."""
         while self.page <= self.max_page:
-            self._build_driver()
             self.url = self._build_url(self.keyword, self.city)
-            self._crwal_sigle_page_by_url()
+            self._crwal_single_page_by_url()
 
             if self.page == 1:
                 self._get_max_page()
@@ -150,7 +149,7 @@ class JobSpiderBoss:
     def _build_driver(self) -> WebDriver:
         self.driver = build_driver(headless=False, proxy=self.proxy.get())
 
-    def _crwal_sigle_page_by_url(self) -> str:
+    def _crwal_single_page_by_url(self) -> str:
         """Get the HTML from the URL."""
         job_list = None
         for _ in range(MAX_RETRIES):
@@ -175,19 +174,21 @@ class JobSpiderBoss:
 
             except TimeoutException:
                 logger.error("TimeoutException of getting job list, retrying")
-                # rebuild driver, refreshing proxy to retry
                 self.driver.quit()
-                self._build_driver()
                 continue
 
         self._parse_job_list(job_list)
 
     def _get(self) -> None:
+        self._build_driver()
         logger.info(f"Crawling {self.url}")
+        random_sleep()
+        random_sleep()
         random_sleep()
 
         self.driver.get(self.url)
         random_sleep()
+
         random_click(self.driver, 5.0)
 
     def _get_max_page(self) -> None:

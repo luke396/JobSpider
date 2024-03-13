@@ -2,8 +2,8 @@
 
 import requests
 
-from spider.utility.path import AREABOSS_SQLITE_FILE_PATH
-from spider.utility.sqlite import execute_sql_command
+from utility.path import AREABOSS_SQLITE_FILE_PATH
+from utility.sql import execute_sql_command
 
 
 class AreaSpiderBoss:
