@@ -136,7 +136,9 @@ class Proxy:
             },
             timeout=10,
         )
-        if response.status_code == 0:
+
+        context_dict = json.loads(response.content.decode("utf8"))
+        if context_dict["data"][self.proxy]:
             logger.error("Proxy check success")
             return True
         logger.info(f"Proxy {self.proxy} is invalid")

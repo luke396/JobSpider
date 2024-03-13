@@ -1,6 +1,7 @@
 """This is a spider for Boss."""
 
 import json
+import random
 import time
 import urllib.parse
 from pathlib import Path
@@ -124,6 +125,7 @@ class JobSpiderBoss:
         self.page = 1
         self.max_page = 10
         self.proxy = Proxy(local=False)
+        self.city_code = str(random.choice(["101010100", "101020100", "101280100"]))
 
     def start(self) -> None:
         """Crawl by building the page url."""
@@ -144,6 +146,23 @@ class JobSpiderBoss:
         query_params = urllib.parse.urlencode(
             {"query": keyword, "city": city, "page": self.page}
         )
+
+        # Random select one or two parameters to drop, then add to the query
+        fake_param = {
+            "industry": "",
+            "jobType": "",
+            "experience": "",
+            "salary": "",
+            "degree": "",
+            "scale": "",
+            "stage": "",
+        }
+        for _ in range(random.randint(1, 3)):
+            if fake_param:
+                random_key = random.choice(list(fake_param.keys()))
+                del fake_param[random_key]
+
+        query_params += "&" + urllib.parse.urlencode(fake_param)
         return f"{base_url}?{query_params}"
 
     def _build_driver(self) -> WebDriver:
@@ -152,6 +171,16 @@ class JobSpiderBoss:
     def _crwal_single_page_by_url(self) -> str:
         """Get the HTML from the URL."""
         job_list = None
+
+        for _ in range(MAX_RETRIES):
+            self._build_driver()
+            job_list = self._get_joblist()
+            if job_list is not None:
+                break
+
+        self._parse_job_list(job_list)
+
+    def _get_joblist(self) -> str:
         for _ in range(MAX_RETRIES):
             try:
                 self._get()
@@ -163,7 +192,6 @@ class JobSpiderBoss:
                     )
                     .get_attribute("innerHTML")
                 )
-
                 if job_list is None:
                     logger.error("job_list is None, maybe proxy is blocked, retrying")
                     break
@@ -176,20 +204,14 @@ class JobSpiderBoss:
                 logger.error("TimeoutException of getting job list, retrying")
                 self.driver.quit()
                 continue
-
-        self._parse_job_list(job_list)
+        return job_list
 
     def _get(self) -> None:
-        self._build_driver()
         logger.info(f"Crawling {self.url}")
-        random_sleep()
-        random_sleep()
-        random_sleep()
-
         self.driver.get(self.url)
-        random_sleep()
-
-        random_click(self.driver, 5.0)
+        self.driver.add_cookie({"name": "lastCity", "value": self.city_code})
+        for _ in range(5):
+            random_sleep()
 
     def _get_max_page(self) -> None:
         max_page = int(

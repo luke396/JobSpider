@@ -4,15 +4,15 @@ import random
 from pathlib import Path
 
 from spider import areaspider51, areaspiderboss, jobspider51, jobspiderboss, logger
-from spider.utility.constant import (
+from utility.constant import (
     KEYWORD,
     MAX_51PAGE_NUM,
 )
-from spider.utility.path import (
+from utility.path import (
     AREA51_SQLITE_FILE_PATH,
     AREABOSS_SQLITE_FILE_PATH,
 )
-from spider.utility.sql import execute_sql_command
+from utility.sql import execute_sql_command
 
 
 def area51_spider() -> None:

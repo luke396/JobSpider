@@ -57,7 +57,7 @@ def build_driver(*, headless: bool, proxy: str) -> webdriver:
 
     Finally, inject script to change navigator = false to avoid detection.
     """
-    user_agent = UserAgent().random
+    user_agent = UserAgent(os=["windows", "macos"]).random
     service = ChromeService(CHROME_SERVICE_PATH)
 
     options = Options()
@@ -77,6 +77,8 @@ def build_driver(*, headless: bool, proxy: str) -> webdriver:
     options.add_argument(f"user-agent={user_agent}")
 
     options.add_argument(f"--proxy-server={proxy}")
+
+    options.add_argument("Accept-Language: zh-CN,zh;q=0.9")
 
     driver = webdriver.Chrome(service=service, options=options)
     driver.execute_script(
