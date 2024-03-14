@@ -4,31 +4,28 @@ import random
 import urllib.parse
 
 from bs4 import BeautifulSoup
-from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.common.by import By
+from fake_useragent import UserAgent
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    Playwright,
+    sync_playwright,
+)
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.support import expected_conditions as EC  # noqa: N812
-from selenium.webdriver.support.ui import WebDriverWait
 
 from spider import logger
 from utility.constant import (
     MAX_RETRIES,
-    WAIT_TIME,
 )
 from utility.path import JOBOSS_SQLITE_FILE_PATH
 from utility.proxy import Proxy
-from utility.selenium_ext import (
-    build_driver,
-    random_click,
-    random_scroll,
-    random_sleep,
-)
 from utility.sql import execute_sql_command
+
 
 # Boss limit 10 pages for each query
 # if add more query keywords, result will be different
-
-
 class JobSpiderBoss:
     """This is a spider for Boss.
 
@@ -37,36 +34,39 @@ class JobSpiderBoss:
 
     driver: WebDriver
 
-    def __init__(self, keyword: str, city: str) -> None:
+    def __init__(
+        self, keyword: str, city: str, playwright: Playwright, *, local_proxy: bool
+    ) -> None:
         """Init."""
         self.keyword = keyword
         self.city = city
-        self.page = 1
-        self.max_page = 10
-        self.proxy = Proxy(local=False)
-        self.city_code = str(random.choice(["101010100", "101020100", "101280100"]))
+        self.proxies: Proxy = Proxy(local=local_proxy)
+
+        self.cur_page_num: int = 1
+        self.max_page_num: int = 10
+
+        self.playwright = playwright
+        self.browser: Browser = None
+        self.context: BrowserContext = None
+        self.page: Page = None
+
+        self._build_browser()
 
     def start(self) -> None:
         """Crawl by building the page url."""
-        while self.page <= self.max_page:
+        while self.cur_page_num <= self.max_page_num:
             self.url = self._build_url(self.keyword, self.city)
             self._crwal_single_page_by_url()
 
-            if self.page == 1:
-                self._get_max_page()
-
-            self.page += 1
-
-            self.driver.quit()
+            self.cur_page_num += 1
 
     def _build_url(self, keyword: str, city: str) -> str:
         """Build the URL for the job search."""
         base_url = "https://www.zhipin.com/web/geek/job"
         query_params = urllib.parse.urlencode(
-            {"query": keyword, "city": city, "page": self.page}
+            {"query": keyword, "city": city, "page": self.cur_page_num}
         )
 
-        # Random select one or two parameters to drop, then add to the query
         fake_param = {
             "industry": "",
             "jobType": "",
@@ -84,61 +84,77 @@ class JobSpiderBoss:
         query_params += "&" + urllib.parse.urlencode(fake_param)
         return f"{base_url}?{query_params}"
 
-    def _build_driver(self) -> WebDriver:
-        self.driver = build_driver(headless=False, proxy=self.proxy.get())
+    def _build_browser(self) -> None:
+        browser_type = self.playwright.chromium
+        launch_args = {
+            "headless": False,
+            "args": [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--enable-automation=true",
+                "--disable-blink-features=AutomationControlled",
+                "--lang=zh-CN,zh;q=0.9",
+            ],
+        }
+        curr_proxy = self.proxies.get()
+        if curr_proxy != "":
+            launch_args["proxy"] = {"server": curr_proxy}
+
+        self.browser = browser_type.launch(**launch_args)
+
+    def _update_context(self) -> None:
+        if self.context:
+            self.context.close()
+        self.context = self.browser.new_context(
+            locale="zh-CN",
+            user_agent=UserAgent(os=["windows", "macos"]).random,
+        )
+
+    def _get_page_joblist(self) -> str:
+        job_list = None
+        self.page = self.context.new_page()
+        self.page.evaluate("navigator.webdriver = undefined")
+        try:
+            self.page.goto(self.url)
+            logger.info(f"Visiting {self.url}")
+
+            self.page.wait_for_timeout(5000)
+            self.page.wait_for_selector("div.search-job-result")
+            job_list = self.page.query_selector(
+                "div.search-job-result ul.job-list-box"
+            ).inner_html()
+
+            if self.cur_page_num == 1:
+                self._get_max_page()
+
+        except AttributeError:
+            logger.error(
+                f"Failed to get the job list from {self.url}, maybe get page too quick"
+            )
+        except PlaywrightTimeoutError:
+            logger.error(f"Timeout of {self.url}, retry")
+        else:
+            return job_list
+        finally:
+            self.page.close()
 
     def _crwal_single_page_by_url(self) -> str:
         """Get the HTML from the URL."""
-        job_list = None
-
         for _ in range(MAX_RETRIES):
-            self._build_driver()
-            job_list = self._get_joblist()
+            self._update_context()
+            job_list = self._get_page_joblist()
             if job_list is not None:
                 break
 
         self._parse_job_list(job_list)
 
-    def _get_joblist(self) -> str:
-        for _ in range(MAX_RETRIES):
-            try:
-                self._get()
-
-                job_list = (
-                    WebDriverWait(self.driver, WAIT_TIME)
-                    .until(
-                        EC.presence_of_element_located((By.CLASS_NAME, "job-list-box"))
-                    )
-                    .get_attribute("innerHTML")
-                )
-                if job_list is None:
-                    logger.error("job_list is None, maybe proxy is blocked, retrying")
-                    break
-
-                random_click(self.driver, 10.0)
-                random_scroll(self.driver)
-                break
-
-            except TimeoutException:
-                logger.error("TimeoutException of getting job list, retrying")
-                self.driver.quit()
-                continue
-        return job_list
-
-    def _get(self) -> None:
-        logger.info(f"Crawling {self.url}")
-        self.driver.get(self.url)
-        self.driver.add_cookie({"name": "lastCity", "value": self.city_code})
-        for _ in range(5):
-            random_sleep()
-
     def _get_max_page(self) -> None:
-        max_page = int(
-            self.driver.find_elements(By.CLASS_NAME, "options-pages")[0].text[-1]
-        )
-        if max_page != 0:  # last charactor is 10, but str select 0 out
-            self.max_page = int(max_page)
-            logger.info(f"Update max page to {self.max_page}")
+        max_page_element = self.page.query_selector(".options-pages")
+        max_page_text = max_page_element.inner_text()
+        max_page = int(max_page_text[-1])
+        if max_page != 0:  # last character is 10, but str select 0 out
+            self.max_page_num = int(max_page)
+            logger.info(f"Update max page to {self.max_page_num}")
 
     def _parse_job_list(self, job_list: str) -> None:
         """Parse the HTML and get the JSON data."""
@@ -229,4 +245,5 @@ def _create_table() -> None:
 def start(keyword: str, area_code: str) -> None:
     """Start the spider."""
     _create_table()
-    JobSpiderBoss(keyword, area_code).start()
+    with sync_playwright() as playwright:
+        JobSpiderBoss(keyword, area_code, playwright, local_proxy=True).start()
