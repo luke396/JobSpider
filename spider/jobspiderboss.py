@@ -1,16 +1,18 @@
 """This is a spider for Boss."""
 
+import asyncio
 import random
-import urllib.parse
+from collections.abc import Coroutine
+from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
-from playwright.sync_api import (
+from playwright.async_api import (
     Browser,
     BrowserContext,
     Page,
     Playwright,
-    sync_playwright,
+    async_playwright,
 )
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -35,7 +37,12 @@ class JobSpiderBoss:
     driver: WebDriver
 
     def __init__(
-        self, keyword: str, city: str, playwright: Playwright, *, local_proxy: bool
+        self,
+        keyword: str,
+        city: str,
+        async_playwright: Playwright,
+        *,
+        local_proxy: bool,
     ) -> None:
         """Init."""
         self.keyword = keyword
@@ -45,27 +52,34 @@ class JobSpiderBoss:
         self.cur_page_num: int = 1
         self.max_page_num: int = 10
 
-        self.playwright = playwright
+        self.async_playwright = async_playwright
         self.browser: Browser = None
-        self.context: BrowserContext = None
-        self.page: Page = None
 
-        self._build_browser()
+    def _chunked_tasks(self, tasks: Coroutine, chunk_size: int) -> Coroutine:
+        """Yield successive chunks from tasks."""
+        for i in range(0, len(tasks), chunk_size):
+            yield tasks[i : i + chunk_size]
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """Crawl by building the page url."""
-        while self.cur_page_num <= self.max_page_num:
-            self.url = self._build_url(self.keyword, self.city)
-            self._crwal_single_page_by_url()
+        await self._build_browser()
 
-            self.cur_page_num += 1
+        # to update max page
+        await self._crwal_single_page_by_url(self.cur_page_num)
+        self.cur_page_num += 1
 
-    def _build_url(self, keyword: str, city: str) -> str:
+        tasks = [
+            self._crwal_single_page_by_url(page)
+            for page in range(self.cur_page_num, self.max_page_num + 1)
+        ]
+
+        for chunk in self._chunked_tasks(tasks, 2):
+            await asyncio.gather(*chunk)
+
+    def _build_url(self, keyword: str, city: str, page_num: int) -> str:
         """Build the URL for the job search."""
         base_url = "https://www.zhipin.com/web/geek/job"
-        query_params = urllib.parse.urlencode(
-            {"query": keyword, "city": city, "page": self.cur_page_num}
-        )
+        query_params = urlencode({"query": keyword, "city": city, "page": page_num})
 
         fake_param = {
             "industry": "",
@@ -76,16 +90,16 @@ class JobSpiderBoss:
             "scale": "",
             "stage": "",
         }
-        for _ in range(random.randint(1, 3)):
-            if fake_param:
-                random_key = random.choice(list(fake_param.keys()))
-                del fake_param[random_key]
 
-        query_params += "&" + urllib.parse.urlencode(fake_param)
+        keys_to_remove = random.sample(list(fake_param), random.randint(2, 5))
+        for key in keys_to_remove:
+            del fake_param[key]
+
+        query_params += "&" + urlencode(fake_param)
         return f"{base_url}?{query_params}"
 
-    def _build_browser(self) -> None:
-        browser_type = self.playwright.chromium
+    async def _build_browser(self) -> None:
+        browser_type = self.async_playwright.chromium
         launch_args = {
             "headless": False,
             "args": [
@@ -93,70 +107,114 @@ class JobSpiderBoss:
                 "--disable-dev-shm-usage",
                 "--enable-automation=true",
                 "--disable-blink-features=AutomationControlled",
-                "--lang=zh-CN,zh;q=0.9",
             ],
         }
-        curr_proxy = self.proxies.get()
-        if curr_proxy != "":
-            launch_args["proxy"] = {"server": curr_proxy}
 
-        self.browser = browser_type.launch(**launch_args)
+        self.browser = await browser_type.launch(**launch_args)
 
-    def _update_context(self) -> None:
-        if self.context:
-            self.context.close()
-        self.context = self.browser.new_context(
+    async def _update_context(self) -> BrowserContext:
+        """Update the context with a new proxy."""
+        return await self.browser.new_context(
             locale="zh-CN",
-            user_agent=UserAgent(os=["windows", "macos"]).random,
+            user_agent=UserAgent().random,
+            proxy={"server": self.proxies.get()},
+            extra_http_headers={"Accept-Encoding": "gzip"},
         )
 
-    def _get_page_joblist(self) -> str:
-        job_list = None
-        self.page = self.context.new_page()
-        self.page.evaluate("navigator.webdriver = undefined")
+    async def _get_cur_page(self, url: str, context: BrowserContext) -> Page:
+        await asyncio.sleep(random.uniform(1, 3))
+        page = await context.new_page()
+        await page.evaluate("navigator.webdriver = undefined")
         try:
-            self.page.goto(self.url)
-            logger.info(f"Visiting {self.url}")
+            await page.goto(url)
+            logger.info(f"Visiting {url}")
 
-            self.page.wait_for_timeout(5000)
-            self.page.wait_for_selector("div.search-job-result")
-            job_list = self.page.query_selector(
-                "div.search-job-result ul.job-list-box"
-            ).inner_html()
+            job_result = page.locator("div.search-job-result ul.job-list-box")
+            await job_result.wait_for(timeout=15000)
 
-            if self.cur_page_num == 1:
-                self._get_max_page()
+            if await self._check_ip_banned(page):
+                await page.close()
+                return None
 
-        except AttributeError:
-            logger.error(
-                f"Failed to get the job list from {self.url}, maybe get page too quick"
-            )
-        except PlaywrightTimeoutError:
-            logger.error(f"Timeout of {self.url}, retry")
-        else:
-            return job_list
-        finally:
-            self.page.close()
+        except PlaywrightTimeoutError as e:
+            logger.error(f"Timeout error of {e} when visiting {url}")
+            await page.close()
+            return None
 
-    def _crwal_single_page_by_url(self) -> str:
-        """Get the HTML from the URL."""
-        for _ in range(MAX_RETRIES):
-            self._update_context()
-            job_list = self._get_page_joblist()
-            if job_list is not None:
-                break
+        return page
 
-        self._parse_job_list(job_list)
+    async def _check_ip_banned(self, page: Page) -> bool:
+        content = await page.content()
+        banned_phrases = [
+            "您暂时无法继续访问~",
+            "当前 IP 地址可能存在异常访问行为，完成验证后即可正常使用.",  # noqa: RUF001
+        ]
+        if any(phrase in content for phrase in banned_phrases):
+            logger.error("IP banned")
+            return True
+        return False
 
-    def _get_max_page(self) -> None:
-        max_page_element = self.page.query_selector(".options-pages")
-        max_page_text = max_page_element.inner_text()
+    async def _query_job_list(self, page: Page) -> str:
+        job_list_ele = await page.query_selector(
+            "div.search-job-result ul.job-list-box"
+        )
+        if job_list_ele:
+            return await job_list_ele.inner_html()
+        return None
+
+    async def _update_max_page(self, page: Page, cur_page_num: int) -> None:
+        if cur_page_num != 1:
+            return
+
+        max_page_element = await page.query_selector(".options-pages")
+        max_page_text = await max_page_element.inner_text()
         max_page = int(max_page_text[-1])
-        if max_page != 0:  # last character is 10, but str select 0 out
-            self.max_page_num = int(max_page)
-            logger.info(f"Update max page to {self.max_page_num}")
 
-    def _parse_job_list(self, job_list: str) -> None:
+        if max_page == 0:  # last character is 10, but str select 0 out
+            logger.info(f"Max page is {self.max_page_num}")
+            return
+
+        self.max_page_num = max_page
+        logger.info(f"Update max page to {self.max_page_num}")
+
+    async def _get_page_joblist(
+        self, url: str, context: BrowserContext, cur_page_num: int
+    ) -> str:
+        page = await self._get_cur_page(url, context)
+        if not page:
+            logger.error(f"Failed to get page {cur_page_num}")
+            return None
+
+        job_list = await self._query_job_list(page)
+        if job_list:
+            await self._update_max_page(page, cur_page_num)
+        else:
+            logger.error(f"Failed to get job list from page {cur_page_num}")
+
+        await page.close()
+        return job_list
+
+    async def _crwal_single_page_by_url(self, cur_page_num: str) -> str:
+        """Get the HTML from the URL."""
+        url = self._build_url(self.keyword, self.city, cur_page_num)
+        job_list = None
+
+        for _ in range(MAX_RETRIES):
+            context = await self._update_context()
+            job_list = await self._get_page_joblist(url, context, cur_page_num)
+            if job_list:
+                break
+            logger.warning(f"Retry {cur_page_num} page {url}")
+
+        if job_list:
+            await self._parse_job_list(job_list)
+            logger.info(f"Finish parsing page {cur_page_num}")
+        else:
+            logger.warning(
+                f"Failed to parse page {cur_page_num} after {MAX_RETRIES} retries"
+            )
+
+    async def _parse_job_list(self, job_list: str) -> None:
         """Parse the HTML and get the JSON data."""
         soup = BeautifulSoup(job_list, "html.parser")
         job_card = soup.find_all("li", class_="job-card-wrapper")
@@ -164,45 +222,29 @@ class JobSpiderBoss:
         self._insert_to_db(jobs)
 
     def _parse_job(self, job: BeautifulSoup) -> dict:
-        job_name = job.find("span", class_="job-name").text
-        job_area = job.find("span", class_="job-area").text
-        job_salary = job.find("span", class_="salary").text
-        edu_exp = ",".join(
-            [
-                li.text
-                for li in job.find("div", class_="job-info clearfix").find_all("li")
-            ]
-        )
+        def _get_text(element: BeautifulSoup, class_name: str) -> str:
+            return element.find("span", class_=class_name).text
 
-        _company_info = job.find("div", class_="company-info")
-        company_name = _company_info.find("h3", class_="company-name").text
-        company_tag = ",".join(
-            [
-                li.text
-                for li in _company_info.find("ul", class_="company-tag-list").find_all(
-                    "li"
-                )
-            ]
-        )
+        def _join_text(element: BeautifulSoup) -> str:
+            return ",".join(li.text for li in element.find_all("li"))
 
-        _cardbottom = job.find("div", class_="job-card-footer clearfix")
-        skill_tags = ",".join(
-            [li.text for li in _cardbottom.find("ul", class_="tag-list").find_all("li")]
-        )
-        job_other_tags = ",".join(
-            _cardbottom.find("div", class_="info-desc").text.split(
-                "，"  # noqa: RUF001
-            )
-        )
+        job_info = job.find("div", class_="job-info clearfix")
+        company_info = job.find("div", class_="company-info")
+        card_bottom = job.find("div", class_="job-card-footer clearfix")
+
         return {
-            "job_name": job_name,
-            "job_area": job_area,
-            "job_salary": job_salary,
-            "edu_exp": edu_exp,
-            "company_name": company_name,
-            "company_tag": company_tag,
-            "skill_tags": skill_tags,
-            "job_other_tags": job_other_tags,
+            "job_name": _get_text(job, "job-name"),
+            "job_area": _get_text(job, "job-area"),
+            "job_salary": _get_text(job, "salary"),
+            "edu_exp": _join_text(
+                job_info.find("ul", class_="tag-list"),
+            ),
+            "company_name": company_info.find("h3", class_="company-name").text,
+            "company_tag": _join_text(company_info),
+            "skill_tags": _join_text(card_bottom.find("ul")),
+            "job_other_tags": ",".join(
+                card_bottom.find("div", class_="info-desc").text.split("，")  # noqa: RUF001
+            ),
         }
 
     def _insert_to_db(self, jobs: dict) -> None:
@@ -217,8 +259,8 @@ class JobSpiderBoss:
             `company_tag`,
             `skill_tags`,
             `job_other_tags`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-        """
+        ) VALUES (:job_name, :area, :salary, :edu_exp, :company_name, :company_tag, :skill_tags, :job_other_tags);
+        """  # noqa: E501
 
         execute_sql_command(sql, JOBOSS_SQLITE_FILE_PATH, jobs)
 
@@ -226,24 +268,31 @@ class JobSpiderBoss:
 def _create_table() -> None:
     """Create the table in the database."""
     sql_table = """
-    CREATE TABLE IF NOT EXISTS `joboss` (
-        `job_name` TEXT NULL,
-        `area` TEXT NULL,
-        `salary` TEXT NULL,
-        `edu_exp` TEXT NULL,
-        `company_name` TEXT NULL,
-        `company_tag` TEXT NULL,
-        `skill_tags` TEXT NULL,
-        `job_other_tags` TEXT NULL,
-        PRIMARY KEY (`job_name`, `company_name`, `area`, `salary`, `skill_tags`)
+    CREATE TABLE IF NOT EXISTS joboss (
+        job_name TEXT,
+        area TEXT,
+        salary TEXT,
+        edu_exp TEXT,
+        company_name TEXT,
+        company_tag TEXT,
+        skill_tags TEXT,
+        job_other_tags TEXT,
+        PRIMARY KEY (job_name, company_name, area, salary, skill_tags)
     );
     """
 
     execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
 
 
-def start(keyword: str, area_code: str) -> None:
+async def start(keyword: str, area_code: str) -> None:
     """Start the spider."""
     _create_table()
-    with sync_playwright() as playwright:
-        JobSpiderBoss(keyword, area_code, playwright, local_proxy=True).start()
+    async with async_playwright() as playwright:
+        spider = JobSpiderBoss(keyword, area_code, playwright, local_proxy=False)
+        await spider.start()
+
+
+if __name__ == "__main__":
+    keywrod = random.choice(["机器学习", "数据挖掘", "人工智能", "深度学习"])
+    area_code = random.choice(["101010100", "101020100", "101070200", "101280100"])
+    asyncio.run(start(keywrod, area_code))

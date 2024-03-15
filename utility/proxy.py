@@ -122,27 +122,7 @@ class Proxy:
         if response.status_code != 200:  # noqa: PLR2004
             raise KdlException(response.status_code, response.content.decode("utf8"))
         self.proxies = [f"http://{ip}" for ip in response.text.split("\n")]
-
-    def _check_proxy(self) -> bool:
-        """Check the proxy ip."""
-        if self.proxy == "":
-            return False
-        response = requests.get(
-            "https://dps.kdlapi.com/api/checkdpsvalid",
-            params={
-                "secret_id": self.SECRET_ID,
-                "signature": self._read_secret_token(),
-                "proxy": self.proxy,
-            },
-            timeout=10,
-        )
-
-        context_dict = json.loads(response.content.decode("utf8"))
-        if context_dict["data"][self.proxy]:
-            logger.error("Proxy check success")
-            return True
-        logger.info(f"Proxy {self.proxy} is invalid")
-        return False
+        logger.info(f"Get proxies: {self.proxies}")
 
     def get(self) -> str:
         """Get a proxy ip."""
@@ -154,10 +134,6 @@ class Proxy:
         if self.local and PLAT_CODE == 0:
             logger.info("Not using proxy")
             return ""
-
-        if self._check_proxy():
-            logger.info(f"Using proxy {self.proxy}")
-            return self.proxy
 
         if not self.proxies:
             self._get_proxies()
