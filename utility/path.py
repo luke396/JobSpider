@@ -12,9 +12,9 @@ def create_output_dir(tag: str) -> str:
 
     if not directory.exists():
         directory.mkdir(parents=True)
-        logger.info(f"Directory {directory} created.")
+        logger.debug(f"Directory {directory} created.")
     else:
-        logger.info(f"Directory {directory} already exists.")
+        logger.debug(f"Directory {directory} already exists.")
     return str(directory)
 
 

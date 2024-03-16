@@ -1,7 +1,7 @@
 """This module contains constants used in the spider."""
 
 WAIT_TIME = 10
-MAX_RETRIES = 3
+MAX_RETRIES = 5
 
 FIREWALL51_MESSAGE = "很抱歉，由于您访问的URL有可能对网站造成安全威胁，您的访问被阻断"  # noqa: RUF001
 JOB51_SLIDER_XPATH = '//div[@class="nc_bg"]'
@@ -15,3 +15,4 @@ MOVE_VARIANCE = 0.01
 MAX_51PAGE_NUM = 20
 MAX_BOSSPAGE_NUM = 10
 KEYWORD = "数据挖掘"
+MAX_ASY_NUM = 5

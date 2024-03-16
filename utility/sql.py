@@ -12,22 +12,24 @@ def execute_sql_command(sql: str, path: Path, values: list | None = None) -> Any
     try:
         with sqlite3.connect(path) as connect:
             cursor = connect.cursor()
-            if values:
-                if sql.strip().upper().startswith("INSERT") and isinstance(
-                    values, list
-                ):
-                    cursor.executemany(sql, values)
-                    logger.info(f"Insert {len(values)} records")
-                else:
-                    cursor.execute(sql, values)
-                    logger.info(f"Execute SQL command: {sql[:20]}.")
-            else:
-                cursor.execute(sql)
-                logger.info(f"Execute SQL command: {sql[:20]}.")
 
-            # Fetch results for SELECT queries, otherwise return None for now
-            if sql.strip().upper().startswith("SELECT"):
-                return cursor.fetchall()
+            if not values:
+                cursor.execute(sql)
+                return (
+                    cursor.fetchall()
+                    if sql.strip().upper().startswith("SELECT")
+                    else None
+                )
+
+            if sql.strip().upper().startswith("INSERT") and isinstance(values, list):
+                cursor.executemany(sql, values)
+                logger.info(f"Insert {len(values)} records")
+            else:
+                cursor.execute(sql, values)
+
+            return (
+                cursor.fetchall() if sql.strip().upper().startswith("SELECT") else None
+            )
 
     except sqlite3.IntegrityError:
         logger.warning("SQL integrity error, not unique value")

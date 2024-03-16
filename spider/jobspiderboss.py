@@ -1,7 +1,9 @@
 """This is a spider for Boss."""
 
 import asyncio
+import contextlib
 import random
+import traceback
 from collections.abc import Coroutine
 from urllib.parse import urlencode
 
@@ -14,7 +16,8 @@ from playwright.async_api import (
     Playwright,
     async_playwright,
 )
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from selenium.webdriver.remote.webdriver import WebDriver
 
 from spider import logger
@@ -60,13 +63,44 @@ class JobSpiderBoss:
         for i in range(0, len(tasks), chunk_size):
             yield tasks[i : i + chunk_size]
 
-    async def start(self) -> None:
-        """Crawl by building the page url."""
+    async def update_max_page(self) -> None:
+        """Update the max page."""
+        if self._check_in_page_table():
+            logger.info(f"Keyword {self.keyword} of {self.city} already in page table")
+            return
+
+        max_page_num = None
         await self._build_browser()
 
-        # to update max page
-        await self._crwal_single_page_by_url(self.cur_page_num)
-        self.cur_page_num += 1
+        for _ in range(MAX_RETRIES):
+            context = await self._update_context()
+            page = await self._get_cur_page(
+                self._build_url(self.keyword, self.city, self.cur_page_num), context
+            )
+            if page:
+                break
+            logger.warning("Update maxpage failed, retrying")
+        else:
+            logger.error(f"Failed to update max page after {MAX_RETRIES} retries")
+            await self.browser.close()
+            return
+
+        try:
+            max_page_num = await self._update_max_page(page)
+        except ValueError:
+            # failed to get max page, pass
+            logger.warning(f"Failed to get max page from {self.keyword} of {self.city}")
+        finally:
+            await page.close()
+            await self.browser.close()
+
+        if max_page_num:
+            self._insert_maxpage_to_db(max_page_num)
+            logger.info(f"Insert max page {max_page_num} to page table")
+
+    async def start(self) -> None:
+        """Crawl by building the page url."""
+        await self.update_max_page()
 
         tasks = [
             self._crwal_single_page_by_url(page)
@@ -101,7 +135,7 @@ class JobSpiderBoss:
     async def _build_browser(self) -> None:
         browser_type = self.async_playwright.chromium
         launch_args = {
-            "headless": False,
+            "headless": True,
             "args": [
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
@@ -124,22 +158,38 @@ class JobSpiderBoss:
     async def _get_cur_page(self, url: str, context: BrowserContext) -> Page:
         await asyncio.sleep(random.uniform(1, 3))
         page = await context.new_page()
-        await page.evaluate("navigator.webdriver = undefined")
+        await page.evaluate("navigator.webdriver = false")
+
+        logger.info(f"Visiting {url}")
+
         try:
-            await page.goto(url)
-            logger.info(f"Visiting {url}")
+            async with page.expect_response(
+                "https://www.zhipin.com/wapi/zpgeek/search/joblist.json*"
+            ) as response_info:
+                await page.goto(url)
 
-            job_result = page.locator("div.search-job-result ul.job-list-box")
-            await job_result.wait_for(timeout=15000)
+                # wait and check if ip banned
+                with contextlib.suppress(PlaywrightTimeoutError):
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                if await self._check_ip_banned(page):
+                    await page.close()
+                    return None
 
-            if await self._check_ip_banned(page):
-                await page.close()
-                return None
+                job_result = page.locator("div.search-job-result ul.job-list-box")
+                await job_result.wait_for(timeout=2000)
 
-        except PlaywrightTimeoutError as e:
-            logger.error(f"Timeout error of {e} when visiting {url}")
-            await page.close()
-            return None
+                response = await response_info.value
+                logger.info(response)
+
+        except PlaywrightTimeoutError:
+            logger.warning(f"Timeout when visiting {url}")
+            logger.warning(f"Stack trace: {traceback.format_exc()}", exc_info=True)
+
+        except PlaywrightError as e:
+            logger.warning(
+                f"Error of type {type(e).__name__} when visiting {url}. Message: {e!s}"
+            )
+            logger.warning(f"Stack trace: {traceback.format_exc()}", exc_info=True)
 
         return page
 
@@ -162,20 +212,17 @@ class JobSpiderBoss:
             return await job_list_ele.inner_html()
         return None
 
-    async def _update_max_page(self, page: Page, cur_page_num: int) -> None:
-        if cur_page_num != 1:
-            return
-
+    async def _update_max_page(self, page: Page) -> str:
         max_page_element = await page.query_selector(".options-pages")
+        if max_page_element is None:
+            raise ValueError
         max_page_text = await max_page_element.inner_text()
         max_page = int(max_page_text[-1])
 
         if max_page == 0:  # last character is 10, but str select 0 out
-            logger.info(f"Max page is {self.max_page_num}")
-            return
+            return 10
 
-        self.max_page_num = max_page
-        logger.info(f"Update max page to {self.max_page_num}")
+        return max_page
 
     async def _get_page_joblist(
         self, url: str, context: BrowserContext, cur_page_num: int
@@ -219,7 +266,7 @@ class JobSpiderBoss:
         soup = BeautifulSoup(job_list, "html.parser")
         job_card = soup.find_all("li", class_="job-card-wrapper")
         jobs = [tuple(self._parse_job(job).values()) for job in job_card]
-        self._insert_to_db(jobs)
+        self._insert_job_to_db(jobs)
 
     def _parse_job(self, job: BeautifulSoup) -> dict:
         def _get_text(element: BeautifulSoup, class_name: str) -> str:
@@ -247,7 +294,7 @@ class JobSpiderBoss:
             ),
         }
 
-    def _insert_to_db(self, jobs: dict) -> None:
+    def _insert_job_to_db(self, jobs: dict) -> None:
         """Insert the data into the database."""
         sql = """
         INSERT INTO `joboss` (
@@ -264,8 +311,39 @@ class JobSpiderBoss:
 
         execute_sql_command(sql, JOBOSS_SQLITE_FILE_PATH, jobs)
 
+    def _insert_maxpage_to_db(self, max_page: int) -> None:
+        """Insert the max page into the database."""
+        sql = """
+        INSERT INTO `joboss_max_page` (
+            `keyword`,
+            `area_code`,
+            `max_page`
+        ) VALUES (:keyword, :area_code, :max_page);
+        """
 
-def _create_table() -> None:
+        execute_sql_command(
+            sql,
+            JOBOSS_SQLITE_FILE_PATH,
+            {"keyword": self.keyword, "area_code": self.city, "max_page": max_page},
+        )
+
+    def _check_in_page_table(self) -> None:
+        """Check if the keyword and area_code is in the page table."""
+        sql = """
+        SELECT `keyword`, `area_code` FROM `joboss_max_page`
+        WHERE `keyword` = :keyword AND `area_code` = :area_code;
+        """
+
+        result = execute_sql_command(
+            sql,
+            JOBOSS_SQLITE_FILE_PATH,
+            {"keyword": self.keyword, "area_code": self.city},
+        )
+
+        return len(result) != 0
+
+
+def _create_job_table() -> None:
     """Create the table in the database."""
     sql_table = """
     CREATE TABLE IF NOT EXISTS joboss (
@@ -284,15 +362,32 @@ def _create_table() -> None:
     execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
 
 
-async def start(keyword: str, area_code: str) -> None:
+def create_max_page_table() -> None:
+    """Create the table in the database."""
+    sql_table = """
+    CREATE TABLE IF NOT EXISTS joboss_max_page (
+        keyword TEXT,
+        area_code TEXT,
+        max_page INTEGER,
+        PRIMARY KEY (keyword, area_code)
+    );
+    """
+
+    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
+
+
+async def update_page(keyword: str, area_code: str) -> None:
     """Start the spider."""
-    _create_table()
     async with async_playwright() as playwright:
         spider = JobSpiderBoss(keyword, area_code, playwright, local_proxy=False)
-        await spider.start()
+        await spider.update_max_page()
 
 
 if __name__ == "__main__":
-    keywrod = random.choice(["机器学习", "数据挖掘", "人工智能", "深度学习"])
-    area_code = random.choice(["101010100", "101020100", "101070200", "101280100"])
-    asyncio.run(start(keywrod, area_code))
+    keywrod = random.choice(
+        ["机器学习", "数据挖掘", "人工智能", "深度学习", "计算机视觉", "数据"]
+    )
+    area_code = random.choice(
+        ["101010100", "101020100", "101070200", "101280100", "101060100"]
+    )
+    asyncio.run(update_page(keywrod, area_code))

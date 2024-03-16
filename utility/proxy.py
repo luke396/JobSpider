@@ -16,6 +16,7 @@ import requests
 import urllib3
 
 from spider import logger
+from utility.constant import MAX_ASY_NUM
 
 
 class CustomHttpAdapter(requests.adapters.HTTPAdapter):
@@ -115,7 +116,7 @@ class Proxy:
             params={
                 "secret_id": self.SECRET_ID,
                 "signature": self._read_secret_token(),
-                "num": 1,
+                "num": MAX_ASY_NUM,
             },
             timeout=10,
         )

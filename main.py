@@ -1,5 +1,6 @@
 """Main function of the project."""
 
+import asyncio
 import random
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from spider import areaspider51, areaspiderboss, jobspider51, jobspiderboss, log
 from utility.constant import (
     KEYWORD,
     MAX_51PAGE_NUM,
+    MAX_ASY_NUM,
 )
 from utility.path import (
     AREA51_SQLITE_FILE_PATH,
@@ -41,7 +43,7 @@ def areaboss_spider() -> None:
     areaspiderboss.start()
 
 
-def joboss_spider() -> None:
+async def joboss_spider() -> None:
     """Get the data of Job."""
     if not Path.exists(AREABOSS_SQLITE_FILE_PATH):
         areaboss_spider()
@@ -50,13 +52,22 @@ def joboss_spider() -> None:
         """SELECT `code`, `name` FROM `areaboss`;""", AREABOSS_SQLITE_FILE_PATH
     )
 
+    jobspiderboss.create_max_page_table()
+
     while areas:
-        area = random.choice(areas)
-        areas.remove(area)
-        logger.info(f"Crawling area-{area[1]}")
-        jobspiderboss.start(keyword=KEYWORD, area_code=area[0])
+        selected_areas = [
+            areas.pop(areas.index(random.choice(areas)))
+            for _ in range(min(MAX_ASY_NUM, len(areas)))
+        ]
+
+        await asyncio.gather(
+            *[
+                jobspiderboss.update_page(keyword=KEYWORD, area_code=area[0])
+                for area in selected_areas
+            ]
+        )
 
 
 if __name__ == "__main__":
-    joboss_spider()
+    asyncio.run(joboss_spider())
     logger.close()
