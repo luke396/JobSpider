@@ -1,10 +1,10 @@
 """This is a spider for Boss."""
 
 import asyncio
-import contextlib
 import random
 import traceback
-from collections.abc import Coroutine
+from collections.abc import AsyncGenerator, Coroutine, Generator
+from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
@@ -14,6 +14,7 @@ from playwright.async_api import (
     BrowserContext,
     Page,
     Playwright,
+    Response,
     async_playwright,
 )
 from playwright.async_api import Error as PlaywrightError
@@ -23,6 +24,8 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from spider import logger
 from utility.constant import (
     MAX_RETRIES,
+    MAX_WAIT_TIME,
+    MIN_WAIT_TIME,
 )
 from utility.path import JOBOSS_SQLITE_FILE_PATH
 from utility.proxy import Proxy
@@ -56,12 +59,38 @@ class JobSpiderBoss:
         self.max_page_num: int = 10
 
         self.async_playwright = async_playwright
-        self.browser: Browser = None
 
-    def _chunked_tasks(self, tasks: Coroutine, chunk_size: int) -> Coroutine:
+    def _chunked_tasks(
+        self, tasks: list[Coroutine], chunk_size: int
+    ) -> Generator[list[Coroutine], None, None]:
         """Yield successive chunks from tasks."""
         for i in range(0, len(tasks), chunk_size):
             yield tasks[i : i + chunk_size]
+
+    @asynccontextmanager
+    async def _managed_browser(self) -> AsyncGenerator[Browser, None]:
+        await self._build_browser()
+        try:
+            yield self.browser
+        finally:
+            await self.browser.close()
+
+    @asynccontextmanager
+    async def _managed_page(
+        self, url: str, context: BrowserContext
+    ) -> AsyncGenerator[Page | None, None]:
+        """Create a new page and close it after use.
+
+        If the page is banned or some other error, return None.
+        """
+        page, banned = await self._get_cur_page(url, context)
+        try:
+            if banned:
+                yield None
+            else:
+                yield page
+        finally:
+            await page.close()
 
     async def update_max_page(self) -> None:
         """Update the max page."""
@@ -69,34 +98,26 @@ class JobSpiderBoss:
             logger.info(f"Keyword {self.keyword} of {self.city} already in page table")
             return
 
-        max_page_num = None
-        await self._build_browser()
+        url = self._build_url(self.keyword, self.city, self.cur_page_num)
 
-        for _ in range(MAX_RETRIES):
-            context = await self._update_context()
-            page = await self._get_cur_page(
-                self._build_url(self.keyword, self.city, self.cur_page_num), context
-            )
-            if page:
-                break
-            logger.warning("Update maxpage failed, retrying")
-        else:
-            logger.error(f"Failed to update max page after {MAX_RETRIES} retries")
-            await self.browser.close()
-            return
+        async with self._managed_browser():
+            for _ in range(MAX_RETRIES):
+                context = await self._update_context()
+                async with self._managed_page(url, context) as page:
+                    if not page:
+                        logger.warning("Page not found, retrying")
+                        continue
 
-        try:
-            max_page_num = await self._update_max_page(page)
-        except ValueError:
-            # failed to get max page, pass
-            logger.warning(f"Failed to get max page from {self.keyword} of {self.city}")
-        finally:
-            await page.close()
-            await self.browser.close()
+                    page_content = await page.content()
 
-        if max_page_num:
-            self._insert_maxpage_to_db(max_page_num)
-            logger.info(f"Insert max page {max_page_num} to page table")
+                max_page = await self._parse_max_page(page_content)
+                if max_page:
+                    self._insert_maxpage_to_db(max_page)
+                    logger.info(f"Insert max page {max_page} to page table")
+                    break
+
+            else:
+                logger.error(f"Failed to update max page after {MAX_RETRIES} retries")
 
     async def start(self) -> None:
         """Crawl by building the page url."""
@@ -133,18 +154,15 @@ class JobSpiderBoss:
         return f"{base_url}?{query_params}"
 
     async def _build_browser(self) -> None:
-        browser_type = self.async_playwright.chromium
-        launch_args = {
-            "headless": True,
-            "args": [
+        self.browser = await self.async_playwright.chromium.launch(
+            headless=True,
+            args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--enable-automation=true",
                 "--disable-blink-features=AutomationControlled",
             ],
-        }
-
-        self.browser = await browser_type.launch(**launch_args)
+        )
 
     async def _update_context(self) -> BrowserContext:
         """Update the context with a new proxy."""
@@ -155,9 +173,12 @@ class JobSpiderBoss:
             extra_http_headers={"Accept-Encoding": "gzip"},
         )
 
-    async def _get_cur_page(self, url: str, context: BrowserContext) -> Page:
-        await asyncio.sleep(random.uniform(1, 3))
-        page = await context.new_page()
+    async def _get_cur_page(
+        self, url: str, context: BrowserContext
+    ) -> tuple[Page, bool]:
+        await asyncio.sleep(random.uniform(MAX_WAIT_TIME, MIN_WAIT_TIME))
+
+        page: Page = await context.new_page()
         await page.evaluate("navigator.webdriver = false")
 
         logger.info(f"Visiting {url}")
@@ -169,38 +190,42 @@ class JobSpiderBoss:
                 await page.goto(url)
 
                 # wait and check if ip banned
-                with contextlib.suppress(PlaywrightTimeoutError):
-                    await page.wait_for_load_state("networkidle", timeout=5000)
+                with suppress(PlaywrightTimeoutError):
+                    await page.wait_for_load_state("networkidle", timeout=10000)
                 if await self._check_ip_banned(page):
-                    await page.close()
-                    return None
+                    return (page, True)
 
                 job_result = page.locator("div.search-job-result ul.job-list-box")
                 await job_result.wait_for(timeout=2000)
 
-                response = await response_info.value
-                logger.info(response)
+                response: Response = await response_info.value
+                logger.info(str(response))
+                return (page, False)
 
         except PlaywrightTimeoutError:
             logger.warning(f"Timeout when visiting {url}")
-            logger.warning(f"Stack trace: {traceback.format_exc()}", exc_info=True)
 
         except PlaywrightError as e:
-            logger.warning(
+            logger.error(
                 f"Error of type {type(e).__name__} when visiting {url}. Message: {e!s}"
             )
-            logger.warning(f"Stack trace: {traceback.format_exc()}", exc_info=True)
+            logger.error(f"Stack trace: {traceback.format_exc()}", exc_info=True)
 
-        return page
+        return (page, True)
 
     async def _check_ip_banned(self, page: Page) -> bool:
-        content = await page.content()
+        try:
+            content = await page.content()
+        except PlaywrightError:
+            logger.warning("Failed to check ip banned.")
+            return False
+
         banned_phrases = [
             "您暂时无法继续访问~",
             "当前 IP 地址可能存在异常访问行为，完成验证后即可正常使用.",  # noqa: RUF001
         ]
         if any(phrase in content for phrase in banned_phrases):
-            logger.error("IP banned")
+            logger.warning("IP banned")
             return True
         return False
 
@@ -210,17 +235,21 @@ class JobSpiderBoss:
         )
         if job_list_ele:
             return await job_list_ele.inner_html()
-        return None
+        return ""
 
-    async def _update_max_page(self, page: Page) -> str:
-        max_page_element = await page.query_selector(".options-pages")
-        if max_page_element is None:
-            raise ValueError
-        max_page_text = await max_page_element.inner_text()
-        max_page = int(max_page_text[-1])
+    async def _parse_max_page(self, page_context: str) -> int | None:
+        soup: BeautifulSoup = BeautifulSoup(page_context, "html.parser")
+        max_page_ele = soup.find("div", class_="options-pages")
+
+        if max_page_ele is None:
+            logger.error("Failed to find max page element")
+            return None
+
+        max_page_text: str = max_page_ele.text
+        max_page: int = int(max_page_text[-1])
 
         if max_page == 0:  # last character is 10, but str select 0 out
-            return 10
+            max_page = 10
 
         return max_page
 
@@ -230,11 +259,11 @@ class JobSpiderBoss:
         page = await self._get_cur_page(url, context)
         if not page:
             logger.error(f"Failed to get page {cur_page_num}")
-            return None
+            return ""
 
         job_list = await self._query_job_list(page)
         if job_list:
-            await self._update_max_page(page, cur_page_num)
+            await self._parse_max_page(page, cur_page_num)
         else:
             logger.error(f"Failed to get job list from page {cur_page_num}")
 
@@ -381,13 +410,3 @@ async def update_page(keyword: str, area_code: str) -> None:
     async with async_playwright() as playwright:
         spider = JobSpiderBoss(keyword, area_code, playwright, local_proxy=False)
         await spider.update_max_page()
-
-
-if __name__ == "__main__":
-    keywrod = random.choice(
-        ["机器学习", "数据挖掘", "人工智能", "深度学习", "计算机视觉", "数据"]
-    )
-    area_code = random.choice(
-        ["101010100", "101020100", "101070200", "101280100", "101060100"]
-    )
-    asyncio.run(update_page(keywrod, area_code))
