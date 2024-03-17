@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator, Coroutine, Generator
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlencode
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, ResultSet, Tag
 from fake_useragent import UserAgent
 from playwright.async_api import (
     Browser,
@@ -19,7 +19,6 @@ from playwright.async_api import (
 )
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from selenium.webdriver.remote.webdriver import WebDriver
 
 from spider import logger
 from utility.constant import (
@@ -30,7 +29,6 @@ from utility.constant import (
 from utility.path import JOBOSS_SQLITE_FILE_PATH
 from utility.proxy import Proxy
 from utility.sql import (
-    create_joboss_url_pool_table,
     execute_sql_command,
 )
 
@@ -40,33 +38,31 @@ from utility.sql import (
 class JobSpiderBoss:
     """This is a spider for Boss.
 
-    Crawl one keyword in one city for all pages.
+    If url is not None, use the url to crawl.
+    If keyword and city is not None, use the keyword and city to update the max page,
+    not to crawl.
     """
-
-    driver: WebDriver
 
     def __init__(
         self,
-        keyword: str,
-        city: str,
         async_play: Playwright,
-        *,
-        local_proxy: bool,
+        keyword: str | None = None,
+        city: str | None = None,
     ) -> None:
         """Init."""
-        self.keyword = keyword
-        self.city = city
-        self.proxies: Proxy = Proxy(local=local_proxy)
+        self.keyword = keyword or ""
+        self.city = city or ""
 
-        self.cur_page_num: int = 1
-        self.max_page_num: int = 10
-
+        self.proxies: Proxy = Proxy(local=False)
         self.async_play = async_play
 
     def _chunked_tasks(
         self, tasks: list[Coroutine], chunk_size: int
     ) -> Generator[list[Coroutine], None, None]:
-        """Yield successive chunks from tasks."""
+        """Yield successive chunks from tasks.
+
+        Used to limit the number of concurrent tasks.
+        """
         for i in range(0, len(tasks), chunk_size):
             yield tasks[i : i + chunk_size]
 
@@ -95,48 +91,9 @@ class JobSpiderBoss:
         finally:
             await page.close()
 
-    async def update_max_page(self) -> None:
-        """Update the max page."""
-        if self._check_in_page_table():
-            logger.info(f"Keyword {self.keyword} of {self.city} already in page table")
-            return
-
-        url = build_single_url(self.keyword, self.city, self.cur_page_num)
-
-        async with self._managed_browser() as browser:
-            for _ in range(MAX_RETRIES):
-                context = await self._update_context(browser)
-                async with self._managed_page(url, context) as page:
-                    if not page:
-                        logger.warning("Page not found, retrying")
-                        continue
-
-                    page_content = await page.content()
-
-                max_page = await self._parse_max_page(page_content)
-                if max_page:
-                    self._insert_maxpage_to_db(max_page)
-                    logger.info(f"Insert max page {max_page} to page table")
-                    break
-
-            else:
-                logger.error(f"Failed to update max page after {MAX_RETRIES} retries")
-
-    async def start(self) -> None:
-        """Crawl by building the page url."""
-        await self.update_max_page()
-
-        tasks = [
-            self._crwal_single_page_by_url(page)
-            for page in range(self.cur_page_num, self.max_page_num + 1)
-        ]
-
-        for chunk in self._chunked_tasks(tasks, 2):
-            await asyncio.gather(*chunk)
-
     async def _build_browser(self) -> Browser:
         return await self.async_play.chromium.launch(
-            headless=True,
+            headless=False,
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
@@ -153,6 +110,44 @@ class JobSpiderBoss:
             proxy={"server": self.proxies.get()},
             extra_http_headers={"Accept-Encoding": "gzip"},
         )
+
+    async def update_max_page(self) -> None:
+        """Update the max page."""
+        if not self.keyword or not self.city:
+            logger.error("Keyword or city is not set")
+            return
+
+        if self._check_in_page_table():
+            logger.info(f"Keyword {self.keyword} of {self.city} already in page table")
+            return
+
+        url = build_single_url(self.keyword, self.city, 1)
+
+        async with self._managed_browser() as browser:
+            for _ in range(MAX_RETRIES):
+                context = await self._update_context(browser)
+                async with self._managed_page(url, context) as page:
+                    if not page:
+                        logger.warning("Page not found, retrying")
+                        continue
+
+                    page_content = await page.content()
+                    break
+
+            else:
+                logger.error(f"Failed to update max page after {MAX_RETRIES} retries")
+
+        max_page = await self._parse_max_page(page_content)
+        if max_page:
+            self._insert_max_page_to_db(max_page)
+            logger.info(f"Insert max page {max_page} to page table")
+
+    async def crawl(self, urls: list[str]) -> None:
+        """Crawl by building the page url."""
+        tasks = [self._crwal_single_page_by_url(url) for url in urls]
+
+        for chunk in self._chunked_tasks(tasks, min(2, len(tasks))):
+            await asyncio.gather(*chunk)
 
     async def _get_cur_page(
         self, url: str, context: BrowserContext
@@ -234,77 +229,73 @@ class JobSpiderBoss:
 
         return max_page
 
-    async def _get_page_joblist(
-        self, url: str, context: BrowserContext, cur_page_num: int
-    ) -> str:
-        page = await self._get_cur_page(url, context)
-        if not page:
-            logger.error(f"Failed to get page {cur_page_num}")
-            return ""
-
-        job_list = await self._query_job_list(page)
-        if job_list:
-            await self._parse_max_page(page, cur_page_num)
-        else:
-            logger.error(f"Failed to get job list from page {cur_page_num}")
-
-        await page.close()
-        return job_list
-
-    async def _crwal_single_page_by_url(self, cur_page_num: str) -> str:
+    async def _crwal_single_page_by_url(self, url: str) -> None:
         """Get the HTML from the URL."""
-        url = self._build_url(self.keyword, self.city, cur_page_num)
-        job_list = None
+        async with self._managed_browser() as browser:
+            for _ in range(MAX_RETRIES):
+                context = await self._update_context(browser)
+                async with self._managed_page(url, context) as page:
+                    if not page:
+                        logger.warning("Page not found, retrying")
+                        continue
 
-        for _ in range(MAX_RETRIES):
-            context = await self._update_context()
-            job_list = await self._get_page_joblist(url, context, cur_page_num)
-            if job_list:
-                break
-            logger.warning(f"Retry {cur_page_num} page {url}")
+                    page_content = await page.content()
+                    break
+            else:
+                logger.error(f"Failed to crawl {url} after {MAX_RETRIES} retries")
+                return
 
-        if job_list:
-            await self._parse_job_list(job_list)
-            logger.info(f"Finish parsing page {cur_page_num}")
-        else:
-            logger.warning(
-                f"Failed to parse page {cur_page_num} after {MAX_RETRIES} retries"
-            )
-
-    async def _parse_job_list(self, job_list: str) -> None:
-        """Parse the HTML and get the JSON data."""
-        soup = BeautifulSoup(job_list, "html.parser")
-        job_card = soup.find_all("li", class_="job-card-wrapper")
-        jobs = [tuple(self._parse_job(job).values()) for job in job_card]
+        jobs = await self._parse_job_list(page_content)
         self._insert_job_to_db(jobs)
 
-    def _parse_job(self, job: BeautifulSoup) -> dict:
-        def _get_text(element: BeautifulSoup, class_name: str) -> str:
-            return element.find("span", class_=class_name).text
+    async def _parse_job_list(self, page_content: str) -> list[tuple[str, ...]]:
+        """Parse the HTML and get the JSON data."""
+        soup = BeautifulSoup(page_content, "html.parser")
+        job_card: ResultSet[Tag] = soup.find_all("li", class_="job-card-wrapper")
+        return [tuple(self._parse_single_job(job).values()) for job in job_card]
 
-        def _join_text(element: BeautifulSoup) -> str:
-            return ",".join(li.text for li in element.find_all("li"))
+    def _parse_single_job(self, job: Tag) -> dict:
+        def _get_text(
+            element: Tag | NavigableString | None, class_name: str, name: str = "span"
+        ) -> str:
+            if isinstance(element, NavigableString):
+                return ""
+            ele = element.find(name, class_=class_name) if element else None
+            return ele.text if ele else ""
 
-        job_info = job.find("div", class_="job-info clearfix")
-        company_info = job.find("div", class_="company-info")
-        card_bottom = job.find("div", class_="job-card-footer clearfix")
+        def _join_text(element: Tag | NavigableString | None) -> str:
+            if isinstance(element, NavigableString):
+                return ""
+            return ",".join(li.text for li in element.find_all("li")) if element else ""
+
+        def _get_info(job: Tag, class_name: str) -> Tag | None:
+            info = job.find("div", class_=class_name)
+            return info if isinstance(info, Tag) else None
+
+        _job_info = _get_info(job, "job-info clearfix")
+        _company_info = _get_info(job, "company-info")
+        _card_bottom = _get_info(job, "job-card-footer clearfix")
 
         return {
             "job_name": _get_text(job, "job-name"),
             "job_area": _get_text(job, "job-area"),
             "job_salary": _get_text(job, "salary"),
-            "edu_exp": _join_text(
-                job_info.find("ul", class_="tag-list"),
+            "edu_exp": (
+                _join_text(_job_info.find("ul", class_="tag-list")) if _job_info else ""
             ),
-            "company_name": company_info.find("h3", class_="company-name").text,
-            "company_tag": _join_text(company_info),
-            "skill_tags": _join_text(card_bottom.find("ul")),
-            "job_other_tags": ",".join(
-                card_bottom.find("div", class_="info-desc").text.split("，")  # noqa: RUF001
+            "company_name": _get_text(_company_info, "company-name", name="h3")
+            if _company_info
+            else "",
+            "company_tag": _join_text(_company_info) if _company_info else "",
+            "skill_tags": _join_text(_card_bottom.find("ul")) if _card_bottom else "",
+            "job_other_tags": (
+                _get_text(_card_bottom, "info-desc", name="div").replace("，", ",")  # noqa: RUF001
+                if _card_bottom
+                else ""
             ),
         }
 
-    def _insert_job_to_db(self, jobs: dict) -> None:
+    def _insert_job_to_db(self, jobs: list) -> None:
         """Insert the data into the database."""
         sql = """
         INSERT INTO `joboss` (
@@ -320,7 +311,7 @@ class JobSpiderBoss:
         """  # noqa: E501
         execute_sql_command(sql, JOBOSS_SQLITE_FILE_PATH, jobs)
 
-    def _insert_maxpage_to_db(self, max_page: int) -> None:
+    def _insert_max_page_to_db(self, max_page: int) -> None:
         """Insert the max page into the database."""
         sql = """
         INSERT INTO `joboss_max_page` (
@@ -400,6 +391,22 @@ async def _build_url_pool(keyword: str, city: str, max_page: int) -> None:
     execute_sql_command(insert_sql, JOBOSS_SQLITE_FILE_PATH, urls)
 
 
+def create_joboss_url_pool_table() -> None:
+    """Create the table in the database."""
+    sql_table = """
+    CREATE TABLE IF NOT EXISTS joboss_url_pool (
+        url TEXT,
+        keyword TEXT,
+        area_code TEXT,
+        visited INTEGER DEFAULT 0,
+        cur_page INTEGER,
+        max_page INTEGER,
+        PRIMARY KEY (url)
+    );
+    """
+    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
+
+
 def build_url_pool() -> None:
     """Build the total URL pool for the job search."""
     create_joboss_url_pool_table()
@@ -415,8 +422,42 @@ def build_url_pool() -> None:
         asyncio.run(_build_url_pool(keyword, area_code, max_page))
 
 
+def _random_select_url() -> str:
+    """Random select a url from the pool."""
+    select_sql = """
+    SELECT `url` FROM `joboss_url_pool` WHERE `visited` = 0 ORDER BY RANDOM() LIMIT 1;
+    """
+    result = execute_sql_command(select_sql, JOBOSS_SQLITE_FILE_PATH)
+    if result:
+        return result[0][0]
+    return ""
+
+
+def _update_url_visited(url: str) -> None:
+    """Update the url visited status."""
+    update_sql = """
+    UPDATE `joboss_url_pool` SET `visited` = 1 WHERE `url` = :url;
+    """
+    execute_sql_command(update_sql, JOBOSS_SQLITE_FILE_PATH, {"url": url})
+
+
 async def update_page(keyword: str, area_code: str) -> None:
     """Start the spider."""
     async with async_playwright() as playwright:
-        spider = JobSpiderBoss(keyword, area_code, playwright, local_proxy=False)
+        spider = JobSpiderBoss(
+            async_play=playwright,
+            keyword=keyword,
+            city=area_code,
+        )
         await spider.update_max_page()
+
+
+async def crawl_single() -> None:
+    """Crawl a single page from the random selected url."""
+    url = _random_select_url()
+    async with async_playwright() as playwright:
+        await JobSpiderBoss(playwright).crawl([url])
+
+
+if __name__ == "__main__":
+    asyncio.run(crawl_single())

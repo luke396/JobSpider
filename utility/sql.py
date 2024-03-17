@@ -74,19 +74,3 @@ def create_joboss_max_page_table() -> None:
     );
     """
     execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
-
-
-def create_joboss_url_pool_table() -> None:
-    """Create the table in the database."""
-    sql_table = """
-    CREATE TABLE IF NOT EXISTS joboss_url_pool (
-        url TEXT,
-        keyword TEXT,
-        area_code TEXT,
-        visited INTEGER DEFAULT 0,
-        cur_page INTEGER,
-        max_page INTEGER,
-        PRIMARY KEY (url)
-    );
-    """
-    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
