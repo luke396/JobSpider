@@ -14,7 +14,7 @@ from utility.path import (
     AREA51_SQLITE_FILE_PATH,
     AREABOSS_SQLITE_FILE_PATH,
 )
-from utility.sql import execute_sql_command
+from utility.sql import create_joboss_max_page_table, execute_sql_command
 
 
 def area51_spider() -> None:
@@ -52,7 +52,7 @@ async def joboss_spider() -> None:
         """SELECT `code`, `name` FROM `areaboss`;""", AREABOSS_SQLITE_FILE_PATH
     )
 
-    jobspiderboss.create_max_page_table()
+    create_joboss_max_page_table()
 
     while areas:
         selected_areas = [

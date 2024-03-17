@@ -29,7 +29,10 @@ from utility.constant import (
 )
 from utility.path import JOBOSS_SQLITE_FILE_PATH
 from utility.proxy import Proxy
-from utility.sql import execute_sql_command
+from utility.sql import (
+    create_joboss_url_pool_table,
+    execute_sql_command,
+)
 
 
 # Boss limit 10 pages for each query
@@ -46,7 +49,7 @@ class JobSpiderBoss:
         self,
         keyword: str,
         city: str,
-        async_playwright: Playwright,
+        async_play: Playwright,
         *,
         local_proxy: bool,
     ) -> None:
@@ -58,7 +61,7 @@ class JobSpiderBoss:
         self.cur_page_num: int = 1
         self.max_page_num: int = 10
 
-        self.async_playwright = async_playwright
+        self.async_play = async_play
 
     def _chunked_tasks(
         self, tasks: list[Coroutine], chunk_size: int
@@ -69,11 +72,11 @@ class JobSpiderBoss:
 
     @asynccontextmanager
     async def _managed_browser(self) -> AsyncGenerator[Browser, None]:
-        await self._build_browser()
+        browser: Browser = await self._build_browser()
         try:
-            yield self.browser
+            yield browser
         finally:
-            await self.browser.close()
+            await browser.close()
 
     @asynccontextmanager
     async def _managed_page(
@@ -98,11 +101,11 @@ class JobSpiderBoss:
             logger.info(f"Keyword {self.keyword} of {self.city} already in page table")
             return
 
-        url = self._build_url(self.keyword, self.city, self.cur_page_num)
+        url = build_single_url(self.keyword, self.city, self.cur_page_num)
 
-        async with self._managed_browser():
+        async with self._managed_browser() as browser:
             for _ in range(MAX_RETRIES):
-                context = await self._update_context()
+                context = await self._update_context(browser)
                 async with self._managed_page(url, context) as page:
                     if not page:
                         logger.warning("Page not found, retrying")
@@ -131,30 +134,8 @@ class JobSpiderBoss:
         for chunk in self._chunked_tasks(tasks, 2):
             await asyncio.gather(*chunk)
 
-    def _build_url(self, keyword: str, city: str, page_num: int) -> str:
-        """Build the URL for the job search."""
-        base_url = "https://www.zhipin.com/web/geek/job"
-        query_params = urlencode({"query": keyword, "city": city, "page": page_num})
-
-        fake_param = {
-            "industry": "",
-            "jobType": "",
-            "experience": "",
-            "salary": "",
-            "degree": "",
-            "scale": "",
-            "stage": "",
-        }
-
-        keys_to_remove = random.sample(list(fake_param), random.randint(2, 5))
-        for key in keys_to_remove:
-            del fake_param[key]
-
-        query_params += "&" + urlencode(fake_param)
-        return f"{base_url}?{query_params}"
-
-    async def _build_browser(self) -> None:
-        self.browser = await self.async_playwright.chromium.launch(
+    async def _build_browser(self) -> Browser:
+        return await self.async_play.chromium.launch(
             headless=True,
             args=[
                 "--no-sandbox",
@@ -164,9 +145,9 @@ class JobSpiderBoss:
             ],
         )
 
-    async def _update_context(self) -> BrowserContext:
+    async def _update_context(self, browser: Browser) -> BrowserContext:
         """Update the context with a new proxy."""
-        return await self.browser.new_context(
+        return await browser.new_context(
             locale="zh-CN",
             user_agent=UserAgent().random,
             proxy={"server": self.proxies.get()},
@@ -337,7 +318,6 @@ class JobSpiderBoss:
             `job_other_tags`
         ) VALUES (:job_name, :area, :salary, :edu_exp, :company_name, :company_tag, :skill_tags, :job_other_tags);
         """  # noqa: E501
-
         execute_sql_command(sql, JOBOSS_SQLITE_FILE_PATH, jobs)
 
     def _insert_maxpage_to_db(self, max_page: int) -> None:
@@ -349,60 +329,90 @@ class JobSpiderBoss:
             `max_page`
         ) VALUES (:keyword, :area_code, :max_page);
         """
-
         execute_sql_command(
             sql,
             JOBOSS_SQLITE_FILE_PATH,
             {"keyword": self.keyword, "area_code": self.city, "max_page": max_page},
         )
 
-    def _check_in_page_table(self) -> None:
+    def _check_in_page_table(self) -> bool:
         """Check if the keyword and area_code is in the page table."""
         sql = """
         SELECT `keyword`, `area_code` FROM `joboss_max_page`
         WHERE `keyword` = :keyword AND `area_code` = :area_code;
         """
-
         result = execute_sql_command(
             sql,
             JOBOSS_SQLITE_FILE_PATH,
             {"keyword": self.keyword, "area_code": self.city},
         )
+        if result:
+            return True
+        return False
 
-        return len(result) != 0
+
+def build_single_url(keyword: str, city: str, page_num: int) -> str:
+    """Build the URL for the job search."""
+    base_url = "https://www.zhipin.com/web/geek/job"
+    query_params = urlencode({"query": keyword, "city": city, "page": page_num})
+
+    fake_param = {
+        "industry": "",
+        "jobType": "",
+        "experience": "",
+        "salary": "",
+        "degree": "",
+        "scale": "",
+        "stage": "",
+    }
+
+    keys_to_remove = random.sample(list(fake_param), random.randint(2, 5))
+    for key in keys_to_remove:
+        del fake_param[key]
+
+    query_params += "&" + urlencode(fake_param)
+    return f"{base_url}?{query_params}"
 
 
-def _create_job_table() -> None:
-    """Create the table in the database."""
-    sql_table = """
-    CREATE TABLE IF NOT EXISTS joboss (
-        job_name TEXT,
-        area TEXT,
-        salary TEXT,
-        edu_exp TEXT,
-        company_name TEXT,
-        company_tag TEXT,
-        skill_tags TEXT,
-        job_other_tags TEXT,
-        PRIMARY KEY (job_name, company_name, area, salary, skill_tags)
-    );
+async def _build_url_pool(keyword: str, city: str, max_page: int) -> None:
+    """Build the URL pool of single city for the job search."""
+    insert_sql = """
+    INSERT INTO `joboss_url_pool` (
+        `url`,
+        `keyword`,
+        `area_code`,
+        `visited`,
+        `cur_page`,
+        `max_page`
+    ) VALUES (:url, :keyword, :area_code, :visited, :cur_page, :max_page);
     """
+    urls = [
+        {
+            "url": build_single_url(keyword, city, cur_page),
+            "keyword": keyword,
+            "area_code": city,
+            "visited": 0,
+            "cur_page": cur_page,
+            "max_page": max_page,
+        }
+        for cur_page in range(1, max_page + 1)
+    ]
+    execute_sql_command(insert_sql, JOBOSS_SQLITE_FILE_PATH, urls)
 
-    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
 
+def build_url_pool() -> None:
+    """Build the total URL pool for the job search."""
+    create_joboss_url_pool_table()
+    results = execute_sql_command(
+        """SELECT `keyword`, `area_code`, `max_page` FROM `joboss_max_page`;""",
+        JOBOSS_SQLITE_FILE_PATH,
+    )
+    if not results:
+        logger.error("No data in joboss_max_page table")
+        return
 
-def create_max_page_table() -> None:
-    """Create the table in the database."""
-    sql_table = """
-    CREATE TABLE IF NOT EXISTS joboss_max_page (
-        keyword TEXT,
-        area_code TEXT,
-        max_page INTEGER,
-        PRIMARY KEY (keyword, area_code)
-    );
-    """
-
-    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
+    for keyword, area_code, max_page in results:
+        asyncio.run(_build_url_pool(keyword, area_code, max_page))
 
 
 async def update_page(keyword: str, area_code: str) -> None:

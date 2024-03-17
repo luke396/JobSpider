@@ -80,23 +80,23 @@ class HandlerLogger:
             },
         )
 
-    def debug(self, message: str, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+    def debug(self, message: str, *args, **kwargs) -> None:
         """Log debug message."""
         self.logger.debug(message, *args, **kwargs)
 
-    def info(self, message: str, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+    def info(self, message: str, *args, **kwargs) -> None:
         """Log info message."""
         self.logger.info(message, *args, **kwargs)
 
-    def warning(self, message: str, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+    def warning(self, message: str, *args, **kwargs) -> None:
         """Log warning message."""
         self.logger.warning(message, *args, **kwargs)
 
-    def error(self, message: str, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+    def error(self, message: str, *args, **kwargs) -> None:
         """Log error message."""
         self.logger.error(message, *args, **kwargs)
 
-    def critical(self, message: str, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+    def critical(self, message: str, *args, **kwargs) -> None:
         """Log critical message."""
         self.logger.critical(message, *args, **kwargs)
 
