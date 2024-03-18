@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup, NavigableString, ResultSet, Tag
-from fake_useragent import UserAgent
+from fake_useragent import UserAgent  # type: ignore[import-untyped]
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -31,6 +31,8 @@ from utility.proxy import Proxy
 from utility.sql import (
     execute_sql_command,
 )
+
+NUM_FOR_SINGLE = 2
 
 
 # Boss limit 10 pages for each query
@@ -55,6 +57,8 @@ class JobSpiderBoss:
 
         self.proxies: Proxy = Proxy(local=False)
         self.async_play = async_play
+
+        self.banned = False
 
     def _chunked_tasks(
         self, tasks: list[Coroutine], chunk_size: int
@@ -81,10 +85,12 @@ class JobSpiderBoss:
         """Create a new page and close it after use.
 
         If the page is banned or some other error, return None.
+
+        It also checks if the IP is banned, passing by `self.banned`.
         """
-        page, banned = await self._get_cur_page(url, context)
+        page, self.banned = await self._get_cur_page(url, context)
         try:
-            if banned:
+            if self.banned:
                 yield None
             else:
                 yield page
@@ -103,7 +109,11 @@ class JobSpiderBoss:
         )
 
     async def _update_context(self, browser: Browser) -> BrowserContext:
-        """Update the context with a new proxy."""
+        """Update the context with a new proxy.
+
+        Note that it will set the `self.banned` to `False`.
+        """
+        self.banned = False
         return await browser.new_context(
             locale="zh-CN",
             user_agent=UserAgent().random,
@@ -121,33 +131,35 @@ class JobSpiderBoss:
             logger.info(f"Keyword {self.keyword} of {self.city} already in page table")
             return
 
+        # enforce num of pages to be 1, just to get the max page
         url = build_single_url(self.keyword, self.city, 1)
 
         async with self._managed_browser() as browser:
             for _ in range(MAX_RETRIES):
                 context = await self._update_context(browser)
-                async with self._managed_page(url, context) as page:
-                    if not page:
-                        logger.warning("Page not found, retrying")
-                        continue
-
-                    page_content = await page.content()
+                page_content = await self._get_page_content(url, context)
+                if page_content:
                     break
-
             else:
                 logger.error(f"Failed to update max page after {MAX_RETRIES} retries")
 
-        max_page = await self._parse_max_page(page_content)
+        max_page = await self._parse_max_page(page_content) if page_content else None
         if max_page:
             self._insert_max_page_to_db(max_page)
             logger.info(f"Insert max page {max_page} to page table")
 
     async def crawl(self, urls: list[str]) -> None:
-        """Crawl by building the page url."""
-        tasks = [self._crwal_single_page_by_url(url) for url in urls]
+        """Crawl by building the page url.
 
-        for chunk in self._chunked_tasks(tasks, min(2, len(tasks))):
-            await asyncio.gather(*chunk)
+        Note that the urls are all sent by the same IP.
+        """
+        if len(urls) == 0:
+            logger.error("No urls to crawl")
+            return
+        if len(urls) == 1:
+            await self._crwal_single_page_by_url(urls[0])
+
+        await self._crawl_multi_page_by_urls(urls)
 
     async def _get_cur_page(
         self, url: str, context: BrowserContext
@@ -230,16 +242,12 @@ class JobSpiderBoss:
         return max_page
 
     async def _crwal_single_page_by_url(self, url: str) -> None:
-        """Get the HTML from the URL."""
+        """Crawl and insert job from the given URL."""
         async with self._managed_browser() as browser:
             for _ in range(MAX_RETRIES):
                 context = await self._update_context(browser)
-                async with self._managed_page(url, context) as page:
-                    if not page:
-                        logger.warning("Page not found, retrying")
-                        continue
-
-                    page_content = await page.content()
+                page_content = await self._get_page_content(url, context)
+                if page_content:
                     break
             else:
                 logger.error(f"Failed to crawl {url} after {MAX_RETRIES} retries")
@@ -248,8 +256,56 @@ class JobSpiderBoss:
         jobs = await self._parse_job_list(page_content)
         self._insert_job_to_db(jobs)
 
-    async def _parse_job_list(self, page_content: str) -> list[tuple[str, ...]]:
+    async def _crawl_multi_page_by_urls(self, urls: list[str]) -> None:
+        """Crawl and insert jobs from the given URLs.
+
+        All of urls are crawled under the same IP,
+        if the IP is banned, change another one and retry.
+        """
+        async with self._managed_browser() as browser:
+            context = await self._update_context(browser)
+            url_to_content: dict[str, asyncio.Task[str | None] | None] = {
+                url: None for url in urls
+            }
+
+            while not all(
+                content and content.result() for content in url_to_content.values()
+            ):
+                async with asyncio.TaskGroup() as tg:
+                    if self.banned:
+                        context = await self._update_context(browser)
+
+                    for url in urls:
+                        content = tg.create_task(self._get_page_content(url, context))
+                        url_to_content[url] = content
+
+                urls = [
+                    url
+                    for url in urls
+                    if getattr(url_to_content[url], "result", lambda: None)()
+                    is None  # to fit mypy check
+                ]
+
+            jobs = [
+                job
+                for content in url_to_content.values()
+                if content and content.result()
+                for job in await self._parse_job_list(content.result())
+            ]
+            self._insert_job_to_db(jobs)
+
+    async def _get_page_content(self, url: str, context: BrowserContext) -> str | None:
+        """Get the HTML from the URL."""
+        async with self._managed_page(url, context) as page:
+            if not page:
+                logger.warning("Page not found, retrying")
+                return None
+            return await page.content()
+
+    async def _parse_job_list(self, page_content: str | None) -> list[tuple[str, ...]]:
         """Parse the HTML and get the JSON data."""
+        if not page_content:
+            return []
         soup = BeautifulSoup(page_content, "html.parser")
         job_card: ResultSet[Tag] = soup.find_all("li", class_="job-card-wrapper")
         return [tuple(self._parse_single_job(job).values()) for job in job_card]
@@ -457,7 +513,18 @@ async def crawl_single() -> None:
     url = _random_select_url()
     async with async_playwright() as playwright:
         await JobSpiderBoss(playwright).crawl([url])
+        _update_url_visited(url)
+
+
+async def crawl_many() -> None:
+    """Crawl all the pages from the pool.
+
+    Send more url to one JobSpiderBoss instance to use the same IP.
+    """
+    urls = [_random_select_url() for _ in range(NUM_FOR_SINGLE)]
+    async with async_playwright() as playwright:
+        await JobSpiderBoss(playwright).crawl(urls)
 
 
 if __name__ == "__main__":
-    asyncio.run(crawl_single())
+    asyncio.run(crawl_many())
