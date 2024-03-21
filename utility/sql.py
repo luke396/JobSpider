@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from spider import logger
-from utility.path import JOBOSS_SQLITE_FILE_PATH
 
 
 def execute_sql_command(
@@ -43,34 +42,3 @@ def execute_sql_command(
         raise
 
     return None
-
-
-def create_joboss_job_table() -> None:
-    """Create the table in the database."""
-    sql_table = """
-    CREATE TABLE IF NOT EXISTS joboss (
-        job_name TEXT,
-        area TEXT,
-        salary TEXT,
-        edu_exp TEXT,
-        company_name TEXT,
-        company_tag TEXT,
-        skill_tags TEXT,
-        job_other_tags TEXT,
-        PRIMARY KEY (job_name, company_name, area, salary, skill_tags)
-    );
-    """
-    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
-
-
-def create_joboss_max_page_table() -> None:
-    """Create the table in the database."""
-    sql_table = """
-    CREATE TABLE IF NOT EXISTS joboss_max_page (
-        keyword TEXT,
-        area_code TEXT,
-        max_page INTEGER,
-        PRIMARY KEY (keyword, area_code)
-    );
-    """
-    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)

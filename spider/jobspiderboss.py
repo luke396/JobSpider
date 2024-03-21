@@ -3,7 +3,7 @@
 import asyncio
 import random
 import traceback
-from collections.abc import AsyncGenerator, Coroutine, Generator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlencode
 
@@ -32,7 +32,8 @@ from utility.sql import (
     execute_sql_command,
 )
 
-NUM_FOR_SINGLE = 2
+NUM_FOR_SINGLE = 5
+MAX_RUNING_PAGES = 5
 
 
 # Boss limit 10 pages for each query
@@ -59,16 +60,6 @@ class JobSpiderBoss:
         self.async_play = async_play
 
         self.banned = False
-
-    def _chunked_tasks(
-        self, tasks: list[Coroutine], chunk_size: int
-    ) -> Generator[list[Coroutine], None, None]:
-        """Yield successive chunks from tasks.
-
-        Used to limit the number of concurrent tasks.
-        """
-        for i in range(0, len(tasks), chunk_size):
-            yield tasks[i : i + chunk_size]
 
     @asynccontextmanager
     async def _managed_browser(self) -> AsyncGenerator[Browser, None]:
@@ -152,6 +143,8 @@ class JobSpiderBoss:
         """Crawl by building the page url.
 
         Note that the urls are all sent by the same IP.
+
+        If url is provided, crawl the provided url, else will using `self.urls`.
         """
         if len(urls) == 0:
             logger.error("No urls to crawl")
@@ -159,7 +152,17 @@ class JobSpiderBoss:
         if len(urls) == 1:
             await self._crwal_single_page_by_url(urls[0])
 
-        await self._crawl_multi_page_by_urls(urls)
+        if len(urls) > MAX_RUNING_PAGES:
+            for i in range(0, len(urls), MAX_RUNING_PAGES):
+                async with asyncio.TaskGroup() as tg:
+                    task = tg.create_task(
+                        self._crawl_multi_page_by_urls(
+                            urls[i : min(i + MAX_RUNING_PAGES, len(urls))]
+                        )
+                    )
+                    await task
+        else:
+            await self._crawl_multi_page_by_urls(urls)
 
     async def _get_cur_page(
         self, url: str, context: BrowserContext
@@ -205,7 +208,7 @@ class JobSpiderBoss:
         try:
             content = await page.content()
         except PlaywrightError:
-            logger.warning("Failed to check ip banned.")
+            logger.warning("Failed to check ip banned, assume not banned")
             return False
 
         banned_phrases = [
@@ -268,6 +271,9 @@ class JobSpiderBoss:
                 url: None for url in urls
             }
 
+            # Note that there is
+            # not limit the max retries here,
+            # assume that changing IP always works
             while not all(
                 content and content.result() for content in url_to_content.values()
             ):
@@ -398,6 +404,51 @@ class JobSpiderBoss:
         return False
 
 
+def create_joboss_job_table() -> None:
+    """Create the table in the database."""
+    sql_table = """
+    CREATE TABLE IF NOT EXISTS joboss (
+        job_name TEXT,
+        area TEXT,
+        salary TEXT,
+        edu_exp TEXT,
+        company_name TEXT,
+        company_tag TEXT,
+        skill_tags TEXT,
+        job_other_tags TEXT,
+        PRIMARY KEY (job_name, company_name, area, salary, skill_tags)
+    );
+    """
+    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
+
+
+def create_joboss_max_page_table() -> None:
+    """Create the table in the database."""
+    sql_table = """
+    CREATE TABLE IF NOT EXISTS joboss_max_page (
+        keyword TEXT,
+        area_code TEXT,
+        max_page INTEGER,
+        PRIMARY KEY (keyword, area_code)
+    );
+    """
+    execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
+
+
+def check_joboss_max_page_table() -> bool:
+    """Check if the table exists."""
+    sql = """
+    SELECT `name` FROM `sqlite_master`
+    WHERE `type` = 'table' AND `name` = 'joboss_max_page';
+    """
+    result = execute_sql_command(sql, JOBOSS_SQLITE_FILE_PATH)
+    if result:
+        logger.info("Table joboss_max_page exists")
+        return True
+    logger.info("Table joboss_max_page does not exist")
+    return False
+
+
 def build_single_url(keyword: str, city: str, page_num: int) -> str:
     """Build the URL for the job search."""
     base_url = "https://www.zhipin.com/web/geek/job"
@@ -463,6 +514,20 @@ def create_joboss_url_pool_table() -> None:
     execute_sql_command(sql_table, JOBOSS_SQLITE_FILE_PATH)
 
 
+def check_joboss_url_pool_table() -> bool:
+    """Check if the table exists."""
+    sql = """
+    SELECT `name` FROM `sqlite_master`
+    WHERE `type` = 'table' AND `name` = 'joboss_url_pool';
+    """
+    result = execute_sql_command(sql, JOBOSS_SQLITE_FILE_PATH)
+    if result:
+        logger.info("Table joboss_url_pool exists")
+        return True
+    logger.info("Table joboss_url_pool does not exist")
+    return False
+
+
 def build_url_pool() -> None:
     """Build the total URL pool for the job search."""
     create_joboss_url_pool_table()
@@ -495,10 +560,11 @@ def _update_url_visited(url: str) -> None:
     UPDATE `joboss_url_pool` SET `visited` = 1 WHERE `url` = :url;
     """
     execute_sql_command(update_sql, JOBOSS_SQLITE_FILE_PATH, {"url": url})
+    logger.info(f"Update {url} visited status")
 
 
 async def update_page(keyword: str, area_code: str) -> None:
-    """Start the spider."""
+    """Start the spider, to update max page, used to build the url pool."""
     async with async_playwright() as playwright:
         spider = JobSpiderBoss(
             async_play=playwright,
@@ -524,6 +590,9 @@ async def crawl_many() -> None:
     urls = [_random_select_url() for _ in range(NUM_FOR_SINGLE)]
     async with async_playwright() as playwright:
         await JobSpiderBoss(playwright).crawl(urls)
+
+        for url in urls:
+            _update_url_visited(url)
 
 
 if __name__ == "__main__":
