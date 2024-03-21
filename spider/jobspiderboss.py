@@ -32,6 +32,8 @@ from utility.sql import (
     execute_sql_command,
 )
 
+# Temp let them equal, means that in one instance,
+# only crawl one group of urls, only one time(except retry due to banned)
 NUM_FOR_SINGLE = 5
 MAX_RUNING_PAGES = 5
 
@@ -187,7 +189,7 @@ class JobSpiderBoss:
                     return (page, True)
 
                 job_result = page.locator("div.search-job-result ul.job-list-box")
-                await job_result.wait_for(timeout=2000)
+                await job_result.wait_for(timeout=5000)
 
                 response: Response = await response_info.value
                 logger.info(str(response))
@@ -588,11 +590,12 @@ async def crawl_many() -> None:
     Send more url to one JobSpiderBoss instance to use the same IP.
     """
     urls = [_random_select_url() for _ in range(NUM_FOR_SINGLE)]
-    async with async_playwright() as playwright:
-        await JobSpiderBoss(playwright).crawl(urls)
+    while urls:
+        async with async_playwright() as playwright:
+            await JobSpiderBoss(playwright).crawl(urls)
 
-        for url in urls:
-            _update_url_visited(url)
+            for url in urls:
+                _update_url_visited(url)
 
 
 if __name__ == "__main__":
