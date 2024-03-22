@@ -2,9 +2,10 @@
 
 import re
 import sqlite3
+from pathlib import Path
 
 import requests
-from fake_useragent import UserAgent
+from fake_useragent import UserAgent  # type: ignore[import-untyped]
 
 from spider import logger
 from utility.path import AREA51_SQLITE_FILE_PATH
@@ -55,7 +56,7 @@ class AreaSpider51:
         """Save functions through different types of mappings."""
         self.save_to_db(data, AREA51_SQLITE_FILE_PATH)
 
-    def save_to_db(self, data: list, output: str) -> None:
+    def save_to_db(self, data: list, output: Path) -> None:
         """Save list data to sqlite."""
         sql_clean = """DROP TABLE IF EXISTS `area51`;"""
 
