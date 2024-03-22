@@ -257,11 +257,11 @@ class JobSipder51:
         return data_json.get("resultbody", {}).get("job", {}).get("items")
 
 
-def start(args: dict) -> None:
+def start(args: dict[str, str]) -> None:
     """Spider starter."""
     spider = JobSipder51(
         keyword=args["keyword"],
-        page=args["page"],
+        page=int(args["page"]),
         area=args["area"],
     )
     data_json = spider.get_data_json()
