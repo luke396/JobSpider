@@ -3,7 +3,7 @@
 import random
 import time
 
-from fake_useragent import UserAgent
+from fake_useragent import UserAgent  # type: ignore[import-untyped]
 from selenium import webdriver
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
@@ -13,8 +13,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from spider import logger
 
 
-# make the headless parameter required
-def build_driver(*, headless: bool, proxy: str) -> webdriver:
+def build_driver(*, headless: bool, proxy: str) -> webdriver.Chrome:
     """Init webdriver, don't forget to close it.
 
     During the building process,
@@ -97,12 +96,12 @@ def random_sleep() -> None:
     time.sleep(sleep_time)
 
 
-def random_paruse() -> None:
+def random_paruse() -> float:
     """Random pause."""
     return random.uniform(MIN_PAUSE, MAX_PAUSE)
 
 
-def random_click(driver: webdriver, fraction: float = 1.0) -> None:
+def random_click(driver: webdriver.Chrome, fraction: float = 1.0) -> None:
     """Add random clicks to simulate human behavior."""
     for _ in range(random.randint(MIN_CLICKS, MAX_CLICKS)):
         # "/WIDTH_FACTOR" and "/HEIGHT_FACTOR" to avoid out of range
@@ -114,11 +113,11 @@ def random_click(driver: webdriver, fraction: float = 1.0) -> None:
             driver.get_window_size()["height"] / fraction / HEIGHT_FACTOR,
         )
         ActionChains(driver).pause(random_paruse()).move_by_offset(
-            x_offset, y_offset
+            int(x_offset), int(y_offset)
         ).click().perform()
 
 
-def random_scroll(driver: webdriver) -> None:
+def random_scroll(driver: webdriver.Chrome) -> None:
     """Scrolls down the page by a random amount."""
     random_paruse()
     scroll_height = driver.execute_script("return document.body.scrollHeight")
