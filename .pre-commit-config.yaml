@@ -8,6 +8,7 @@ repos:
 
 - repo: local
   hooks:
+  # mypy is slow, so change it to manual when needed
   - id: mypy
     # note: assumes python env is setup and activated
     name: mypy
