@@ -306,9 +306,14 @@ class JobSpiderBoss:
             jobs = [
                 job
                 for content in url_to_content.values()
-                if content and content.result()
+                if content and content.result()  # unnecessary check, just for mypy
                 for job in await self._parse_job_list(content.result())
             ]
+
+            # Sometimes, even log shows insert many records,
+            # but the actually increasement is not that much.
+            # Maybe because of the same record igored by the primary key,
+            # but maybe there is some unknown bug
             self._insert_job_to_db(jobs)
 
     async def _get_page_content(self, url: str, context: BrowserContext) -> str | None:
