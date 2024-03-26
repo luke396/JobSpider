@@ -34,7 +34,13 @@ from utility.sql import (
 
 # Temp let them equal, means that in one instance,
 # only crawl one group of urls, only one time(except retry due to banned)
-NUM_FOR_SINGLE = 32
+
+# If let them not eaqual, though in same instance,
+# trying get more groups of urls, it will change IP for every groups.
+
+# Actually, it always update IP every time when getting.
+# Update url and change IP nooed to more dynamic logic improment
+NUM_FOR_SINGLE = 16
 MAX_RUNING_PAGES = 16
 
 
@@ -46,6 +52,8 @@ class JobSpiderBoss:
     If url is not None, use the url to crawl.
     If keyword and city is not None, use the keyword and city to update the max page,
     not to crawl.
+
+    Suit for short time proxy IP pool.
     """
 
     def __init__(
@@ -184,12 +192,12 @@ class JobSpiderBoss:
 
                 # wait and check if ip banned
                 with suppress(PlaywrightTimeoutError):
-                    await page.wait_for_load_state("networkidle", timeout=35000)
+                    await page.wait_for_load_state("networkidle", timeout=30000)
                 if await self._check_ip_banned(page):
                     return (page, True)
 
                 job_result = page.locator("div.search-job-result ul.job-list-box")
-                await job_result.wait_for(timeout=30000)
+                await job_result.wait_for(timeout=50000)
 
                 response: Response = await response_info.value
                 logger.info(str(response))
