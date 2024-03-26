@@ -210,11 +210,12 @@ class JobSpiderBoss:
         # Note that, it will not catch all IP banned,
         # the function is just for speed up sometimes
         # If current IP is indeed banned, it finally will cause a PlaywrightTimeoutError
-        # and cought `get_cur_page()`
+        # and caught `get_cur_page()`
         try:
             await asyncio.sleep(2)
             content = await page.content()
             url = page.url
+            # catch well, and return to retry
             if any(
                 phrase in content
                 for phrase in [
@@ -224,6 +225,7 @@ class JobSpiderBoss:
             ):
                 logger.warning("IP banned, found banned phrase")
                 return True
+            # catch well, but not directly return to rerty.
             if url.endswith("ka=pc"):
                 logger.warning("IP banned, URL ends with 'ka=pc'")
                 return True
@@ -312,7 +314,7 @@ class JobSpiderBoss:
 
             # Sometimes, even log shows insert many records,
             # but the actually increasement is not that much.
-            # Maybe because of the same record igored by the primary key,
+            # Maybe because of the same record ignored by the primary key,
             # but maybe there is some unknown bug
             self._insert_job_to_db(jobs)
 
