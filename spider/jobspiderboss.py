@@ -622,7 +622,3 @@ async def crawl_many() -> None:
 
             for url in urls:
                 _update_url_visited(url)
-
-
-if __name__ == "__main__":
-    _random_select_url()
