@@ -2,7 +2,6 @@
 
 import asyncio
 import random
-import traceback
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlencode
@@ -14,7 +13,6 @@ from playwright.async_api import (
     BrowserContext,
     Page,
     Playwright,
-    Response,
     async_playwright,
 )
 from playwright.async_api import Error as PlaywrightError
@@ -101,6 +99,50 @@ class JobSpiderBoss:
         finally:
             await page.close()
 
+    async def _get_cur_page(
+        self, url: str, context: BrowserContext
+    ) -> tuple[Page, bool]:
+        page: Page = await context.new_page()
+        await page.evaluate("navigator.webdriver = false")
+
+        try:
+            async with page.expect_response(
+                "https://www.zhipin.com/wapi/zpgeek/search/joblist.json*"
+            ) as response_info:
+                await asyncio.sleep(random.randint(MIN_WAIT_TIME, MAX_WAIT_TIME))
+
+                logger.info(f"Visiting {url}")
+                await page.goto(url)
+
+                if await self._check_ip_banned(page):
+                    return (page, True)
+
+                if await self._failed_wait_job_list(page):
+                    return (page, True)
+
+                logger.info(str(await response_info.value))
+
+                return (page, False)
+
+        except PlaywrightTimeoutError:
+            logger.warning(f"Timeout when get cur {url}")
+
+        except PlaywrightError as e:
+            logger.error(
+                f"Error of type {type(e).__name__} when visiting {url}. Message: {e!s}"
+            )
+
+        return (page, True)
+
+    async def _failed_wait_job_list(self, page: Page) -> bool:
+        try:
+            job_result = page.locator("div.search-job-result ul.job-list-box")
+            await job_result.wait_for(timeout=20000)
+        except PlaywrightTimeoutError:
+            logger.warning("Timeout when waiting job list")
+            return True
+        return False
+
     async def _build_browser(self) -> Browser:
         return await self.async_play.chromium.launch(
             headless=True,
@@ -177,56 +219,21 @@ class JobSpiderBoss:
         else:
             await self._crawl_multi_page_by_urls(urls)
 
-    async def _get_cur_page(
-        self, url: str, context: BrowserContext
-    ) -> tuple[Page, bool]:
-        await asyncio.sleep(random.uniform(MAX_WAIT_TIME, MIN_WAIT_TIME))
-
-        page: Page = await context.new_page()
-        await page.evaluate("navigator.webdriver = false")
-
-        logger.info(f"Visiting {url}")
-
-        try:
-            async with page.expect_response(
-                "https://www.zhipin.com/wapi/zpgeek/search/joblist.json*"
-            ) as response_info:
-                await page.goto(url)
-
-                # wait and check if ip banned
-                with suppress(PlaywrightTimeoutError):
-                    await page.wait_for_load_state("networkidle", timeout=30000)
-                if await self._check_ip_banned(page):
-                    return (page, True)
-
-                job_result = page.locator("div.search-job-result ul.job-list-box")
-                await job_result.wait_for(timeout=50000)
-
-                response: Response = await response_info.value
-                logger.info(str(response))
-                return (page, False)
-
-        except PlaywrightTimeoutError:
-            logger.warning(f"Timeout when visiting {url}")
-
-        except PlaywrightError as e:
-            logger.error(
-                f"Error of type {type(e).__name__} when visiting {url}. Message: {e!s}"
-            )
-            logger.error(f"Stack trace: {traceback.format_exc()}", exc_info=True)
-
-        return (page, True)
-
     async def _check_ip_banned(self, page: Page) -> bool:
         # Note that, it will not catch all IP banned,
         # the function is just for speed up sometimes
         # If current IP is indeed banned, it finally will cause a PlaywrightTimeoutError
         # and caught `get_cur_page()`
+
         try:
-            await asyncio.sleep(2)
-            content = await page.content()
-            url = page.url
+            # wait and check if ip banned
+            # if timeout, not raise error
+            with suppress(PlaywrightTimeoutError):
+                await page.wait_for_load_state("networkidle", timeout=30000)
+
             # catch well, and return to retry
+            await asyncio.sleep(5)  # wait for the page to load
+            content = await page.content()
             if any(
                 phrase in content
                 for phrase in [
@@ -236,13 +243,18 @@ class JobSpiderBoss:
             ):
                 logger.warning("IP banned, found banned phrase")
                 return True
-            # catch well, but not directly return to rerty.
+
+            # catch well, but not directly return to rerty,
+            # why not return?
+            url = page.url
             if url.endswith("ka=pc"):
                 logger.warning("IP banned, URL ends with 'ka=pc'")
                 return True
+
         except PlaywrightError:
             logger.info("Failed to check ip banned, assume not banned")
             return False
+
         return False
 
     async def _query_job_list(self, page: Page) -> str:
