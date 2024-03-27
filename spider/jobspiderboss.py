@@ -32,6 +32,9 @@ from utility.sql import (
     execute_sql_command,
 )
 
+# A possible improvement is to use more thread to share IP status.
+# And using other way to manage url pool, like using a queue.
+
 # Temp let them equal, means that in one instance,
 # only crawl one group of urls, only one time(except retry due to banned)
 
