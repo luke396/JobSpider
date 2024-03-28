@@ -41,7 +41,7 @@ from utility.sql import (
 # If let them not eaqual, though in same instance,
 # trying get more groups of urls, it will change IP for every groups.
 NUM_FOR_SINGLE = 16
-MAX_RUNING_PAGES = 16
+MAX_RUNING_PAGES = NUM_FOR_SINGLE
 # Actually, it always update IP every time when getting.
 # Update url and change IP nooed to more dynamic logic improment
 
@@ -138,7 +138,7 @@ class JobSpiderBoss:
     async def _failed_wait_job_list(self, page: Page) -> bool:
         try:
             job_result = page.locator("div.search-job-result ul.job-list-box")
-            await job_result.wait_for(timeout=25000)
+            await job_result.wait_for(timeout=30000)
         except PlaywrightTimeoutError:
             logger.warning("Timeout when waiting job list")
             return True
@@ -161,9 +161,11 @@ class JobSpiderBoss:
         Note that it will set the `self.banned` to `False`.
         """
         self.banned = False
+        user_agent = UserAgent(platforms="pc").random
+        logger.info(f"Using user agent: {user_agent}")
         return await browser.new_context(
             locale="zh-CN",
-            user_agent=UserAgent().random,
+            user_agent=user_agent,
             proxy={"server": self.proxies.get()},
             extra_http_headers={"Accept-Encoding": "gzip"},
         )
@@ -232,9 +234,9 @@ class JobSpiderBoss:
             with suppress(PlaywrightTimeoutError):
                 await page.wait_for_load_state("networkidle", timeout=30000)
 
-            # catch well, and return to retry
             await asyncio.sleep(5)  # wait for the page to load
             content = await page.content()
+            # catch well, and return to retry
             if any(
                 phrase in content
                 for phrase in [
@@ -245,10 +247,10 @@ class JobSpiderBoss:
                 logger.warning("IP banned, found banned phrase")
                 return True
 
+            url = page.url
             # catch well, but not directly return to rerty,
             # why not return?
-            url = page.url
-            if url.endswith("ka=pc"):
+            if url.endswith("ka=pc"):  # Because of mobile user agent.
                 logger.warning("IP banned, URL ends with 'ka=pc'")
                 return True
 
