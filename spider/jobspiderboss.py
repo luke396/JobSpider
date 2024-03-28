@@ -30,19 +30,20 @@ from utility.sql import (
     execute_sql_command,
 )
 
+# The limit of spider is CPU, not memory.
+# This is way it can only run in local instead of cloud server.
+
 # A possible improvement is to use more thread to share IP status.
 # And using other way to manage url pool, like using a queue.
 
 # Temp let them equal, means that in one instance,
 # only crawl one group of urls, only one time(except retry due to banned)
-
 # If let them not eaqual, though in same instance,
 # trying get more groups of urls, it will change IP for every groups.
-
-# Actually, it always update IP every time when getting.
-# Update url and change IP nooed to more dynamic logic improment
 NUM_FOR_SINGLE = 16
 MAX_RUNING_PAGES = 16
+# Actually, it always update IP every time when getting.
+# Update url and change IP nooed to more dynamic logic improment
 
 
 # Boss limit 10 pages for each query
