@@ -138,7 +138,7 @@ class JobSpiderBoss:
     async def _failed_wait_job_list(self, page: Page) -> bool:
         try:
             job_result = page.locator("div.search-job-result ul.job-list-box")
-            await job_result.wait_for(timeout=20000)
+            await job_result.wait_for(timeout=25000)
         except PlaywrightTimeoutError:
             logger.warning("Timeout when waiting job list")
             return True
